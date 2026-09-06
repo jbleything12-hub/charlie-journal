@@ -131,6 +131,7 @@
 
     editingFoodId: null,
     showAddNutrition: false,
+    newFoodDraft: { name: '', cals: '', kcalkg: '', protein: '', fat: '', fiber: '' },
     editingSupplementId: null,
 
     error: '',
@@ -190,7 +191,7 @@
     food.gramsPerCup = gramsPerCup(food.calsPerCup, food.kcalPerKg);
     var list = state.foods.concat([food]);
     setFoods(list);
-    setState({ foods: list, showAddNutrition: false });
+    setState({ foods: list, showAddNutrition: false, newFoodDraft: { name: '', cals: '', kcalkg: '', protein: '', fat: '', fiber: '' } });
     if (window.CharlieSync && window.CharlieSync.pushFood) window.CharlieSync.pushFood(food);
   }
 
@@ -850,13 +851,20 @@
   }
 
   function foodsHtml() {
+    var d = state.newFoodDraft;
     var html = '<section class="card"><h2 style="margin-bottom:12px;">Charlie\'s foods</h2>' +
       '<div class="inline-form">' +
-      '<div class="field"><label>Food name</label><input type="text" id="new-food-name" placeholder="e.g. Salmon LID" /></div>' +
-      '<div class="field"><label>Calories per cup</label><input type="number" step="0.01" min="0" id="new-food-cals" placeholder="e.g. 413" /></div>';
+      '<div class="field"><label>Food name</label><input type="text" id="new-food-name" placeholder="e.g. Salmon LID" value="' + esc(d.name) + '" /></div>' +
+      '<div class="field"><label>Calories per cup</label><input type="number" step="0.01" min="0" id="new-food-cals" placeholder="e.g. 413" value="' + esc(d.cals) + '" /></div>';
 
     if (state.showAddNutrition) {
-      html += nutritionFieldsHtml(function (f) { return 'new-food-' + f; }, null) +
+      var draftCals = parseFloat(d.cals);
+      var draftKcalKg = parseFloat(d.kcalkg);
+      var draftFoodLike = {
+        kcalPerKg: d.kcalkg, proteinPct: d.protein, fatPct: d.fat, fiberPct: d.fiber,
+        gramsPerCup: gramsPerCup(draftCals, draftKcalKg)
+      };
+      html += nutritionFieldsHtml(function (f) { return 'new-food-' + f; }, draftFoodLike) +
         '<button type="button" class="btn-secondary" style="width:100%;" data-action="toggle-add-nutrition">Hide nutrition info</button>';
     } else {
       html += '<button type="button" class="btn-secondary" style="width:100%;" data-action="toggle-add-nutrition">' + ICONS.plus + ' Add nutrition info (optional)</button>';
@@ -1054,7 +1062,7 @@
       loadReport();
     };
 
-    bindGramsPreview('new-food-cals', 'new-food-kcalkg', 'new-food-gpc-preview');
+    bindNewFoodDraftFields();
     if (state.editingFoodId) {
       bindGramsPreview(
         'edit-food-cals-' + state.editingFoodId,
@@ -1063,6 +1071,30 @@
       );
     }
     bindPendingPreview();
+  }
+
+  // Keeps state.newFoodDraft in sync with every keystroke in the Add Food
+  // form — not just at submit time — so that toggling "Add nutrition info"
+  // (or any other action that triggers a re-render while this form is open)
+  // never wipes out what's already been typed. Also drives the live
+  // grams-per-cup preview, since calories/cup and calories/kg live here too.
+  function bindNewFoodDraftFields() {
+    var ids = { name: 'new-food-name', cals: 'new-food-cals', kcalkg: 'new-food-kcalkg', protein: 'new-food-protein', fat: 'new-food-fat', fiber: 'new-food-fiber' };
+    var calsEl = document.getElementById(ids.cals);
+    var kcalEl = document.getElementById(ids.kcalkg);
+    var previewEl = document.getElementById('new-food-gpc-preview');
+
+    Object.keys(ids).forEach(function (key) {
+      var el = document.getElementById(ids[key]);
+      if (!el) return;
+      el.oninput = function () {
+        state.newFoodDraft[key] = this.value;
+        if (previewEl && calsEl && kcalEl) {
+          var gpc = gramsPerCup(parseFloat(calsEl.value), parseFloat(kcalEl.value));
+          previewEl.textContent = gpc ? '≈' + gpc + 'g per cup' : 'Add this and calories/cup to see grams per cup';
+        }
+      };
+    });
   }
 
   function bindGramsPreview(calsId, kcalId, previewId) {
