@@ -192,6 +192,7 @@
     overlay.id = 'signin-overlay';
     overlay.innerHTML =
       '<div class="signin-card">' +
+      '<img class="signin-mark" src="icons/icon-192.png" alt="" />' +
       '<h2>Sign in to Charlie&rsquo;s Journal</h2>' +
       '<p>Sign in once so the log backs up automatically from here on.</p>' +
       '<div class="field"><label>Email</label><input type="email" id="signin-email" autocomplete="username" /></div>' +

@@ -268,8 +268,7 @@
     x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
     alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 17h.01"/></svg>',
-    upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9m0 0l-4 4m4-4l4 4"/><path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/></svg>',
-    paw: '<svg viewBox="0 0 24 24" fill="currentColor"><ellipse cx="12" cy="16.2" rx="4.6" ry="4"/><ellipse cx="5.6" cy="10.8" rx="2.1" ry="2.6"/><ellipse cx="9.6" cy="7.4" rx="2.1" ry="2.8"/><ellipse cx="14.4" cy="7.4" rx="2.1" ry="2.8"/><ellipse cx="18.4" cy="10.8" rx="2.1" ry="2.6"/></svg>'
+    upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9m0 0l-4 4m4-4l4 4"/><path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/></svg>'
   };
 
   function segmented(options, value, onclickAttr) {
@@ -291,7 +290,7 @@
   }
 
   function headerHtml() {
-    return '<header class="app-header"><div class="title-row"><span class="paw">' + ICONS.paw + '</span>' +
+    return '<header class="app-header"><div class="title-row"><img class="brand-mark" src="icons/icon-192.png" alt="" />' +
       '<div><h1>Charlie\'s Journal</h1><p>Food and bathroom log</p></div></div></header>';
   }
 
