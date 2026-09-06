@@ -70,6 +70,40 @@ back down.
 The **Export to Excel** button on the Reports tab is for sharing readable
 data with your vet — a snapshot, not a way to restore the app itself.
 
+## Building an entry (as of this update)
+
+Food is now logged as one time-stamped entry that can hold several things at
+once — tap "Salmon LID," add 1 cup, tap "Fish Oil," add 3 pumps, and it all
+saves together as a single 10:45am entry instead of two separate rows.
+
+- **Foods and Supplements** each get their own chip row on the Journal tab.
+  Supplements are managed on the Foods tab, same pattern as foods — name plus
+  an optional calories-per-pump (handy for something like a fish oil pump
+  bottle that lists kcal per pump on the label).
+- **"Something he shouldn't have eaten"** logs an off-plan item with just a
+  time and a free-text description — no calorie or nutrient math, since
+  there's nothing to calculate for a sock or a piece of trash. It can be
+  added on its own or alongside a normal meal in the same entry.
+- Editing a saved entry reopens the same builder, pre-filled, so you can add,
+  remove, or adjust before saving again.
+- Old entries logged before this update still display correctly — they're
+  read and grouped into this shape automatically, nothing is lost.
+
+**One-time setup in Supabase** for supplements — run this once in the SQL
+Editor:
+
+```sql
+create table supplements (
+  id text primary key,
+  user_id uuid references auth.users not null default auth.uid(),
+  name text not null,
+  cals_per_pump numeric,
+  updated_at timestamptz default now()
+);
+alter table supplements enable row level security;
+create policy "own supplements" on supplements for all using (auth.uid() = user_id);
+```
+
 ## Nutrient tracking (optional, per food)
 
 You can now log a food's calories-per-kg, protein %, fat %, and fiber % (all

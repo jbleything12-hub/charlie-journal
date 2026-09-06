@@ -15,22 +15,16 @@
   };
   var uid = function () { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); };
   var nowTime = function () { return new Date().toTimeString().slice(0, 5); };
-  var emptyEntry = function () { return { foodLogs: [], poopLogs: [], updatedAt: 0 }; };
   var esc = function (s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
     });
   };
-
   var round2 = function (n) { return Math.round(n * 100) / 100; };
-  // grams of food in one cup, derived from the two calorie numbers every dog
-  // food label already prints (kcal/kg and kcal/cup) — no scale needed.
   var gramsPerCup = function (calsPerCup, kcalPerKg) {
     if (!kcalPerKg || kcalPerKg <= 0 || !calsPerCup) return null;
     return round2((calsPerCup / kcalPerKg) * 1000);
   };
-  // estimated grams of a nutrient for a given number of cups, or null if the
-  // food doesn't have that nutrient's guaranteed-analysis % on file.
   var nutrientGrams = function (food, cups, pctField) {
     if (!food.gramsPerCup || food[pctField] == null) return null;
     return round2(cups * food.gramsPerCup * (food[pctField] / 100));
@@ -43,15 +37,46 @@
     };
   };
 
+  var emptyEntry = function () { return { meals: [], poopLogs: [], updatedAt: 0 }; };
+
+  // Converts an older single-item-per-time-slot day (foodLogs: [...]) into the
+  // current shape (meals: [{ time, items: [...] }]) by grouping same-time
+  // entries into one meal. Every field on each item is preserved as-is.
+  function migrateEntryShape(raw) {
+    if (!raw) return emptyEntry();
+    if (Array.isArray(raw.meals)) return raw;
+    if (!Array.isArray(raw.foodLogs)) return { meals: [], poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    var groups = {};
+    var order = [];
+    raw.foodLogs.forEach(function (f) {
+      var key = f.time || 'unknown';
+      if (!groups[key]) {
+        groups[key] = { id: uid(), time: f.time || '00:00', updatedAt: raw.updatedAt || Date.now(), items: [] };
+        order.push(key);
+      }
+      groups[key].items.push({
+        id: f.id || uid(), type: 'food', foodId: f.foodId, foodName: f.foodName, cups: f.cups, calories: f.calories,
+        proteinG: f.proteinG != null ? f.proteinG : null,
+        fatG: f.fatG != null ? f.fatG : null,
+        fiberG: f.fiberG != null ? f.fiberG : null
+      });
+    });
+    return { meals: order.map(function (k) { return groups[k]; }), poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+  }
+
   // ---- storage ----
   function getFoods() {
     try { return JSON.parse(localStorage.getItem('charlie:foods') || '[]'); } catch (e) { return []; }
   }
   function setFoods(list) { localStorage.setItem('charlie:foods', JSON.stringify(list)); }
+  function getSupplements() {
+    try { return JSON.parse(localStorage.getItem('charlie:supplements') || '[]'); } catch (e) { return []; }
+  }
+  function setSupplements(list) { localStorage.setItem('charlie:supplements', JSON.stringify(list)); }
   function getEntry(key) {
     try {
       var raw = localStorage.getItem('charlie:entry:' + key);
-      return raw ? JSON.parse(raw) : emptyEntry();
+      return raw ? migrateEntryShape(JSON.parse(raw)) : emptyEntry();
     } catch (e) { return emptyEntry(); }
   }
   function setEntry(key, val) { localStorage.setItem('charlie:entry:' + key, JSON.stringify(val)); }
@@ -67,9 +92,14 @@
     tab: 'journal',
     dateKey: toKey(new Date()),
     foods: getFoods(),
+    supplements: getSupplements(),
     entry: getEntry(toKey(new Date())),
-    activeFoodId: null,
-    editingFoodLogId: null,
+
+    draftMeal: null,          // { time, items: [] } while building/editing a bowl
+    editingMealId: null,
+    pendingChip: null,        // { type: 'food'|'supplement', id }
+    showOtherForm: false,
+
     showPoopForm: false,
     poopSize: 'Typical',
     poopTexture: 'Solid',
@@ -78,8 +108,11 @@
     editPoopSize: 'Typical',
     editPoopTexture: 'Solid',
     editPoopAbnormal: false,
+
     editingFoodId: null,
     showAddNutrition: false,
+    editingSupplementId: null,
+
     error: '',
     reportGranularity: 'week',
     reportAnchor: toKey(new Date()),
@@ -91,18 +124,26 @@
     render();
   }
 
-  // ---- actions ----
+  // ---- date nav ----
   function shiftDate(days) {
     var d = fromKey(state.dateKey);
     d.setDate(d.getDate() + days);
     var key = toKey(d);
-    setState({ dateKey: key, entry: getEntry(key), activeFoodId: null, showPoopForm: false });
+    setState({
+      dateKey: key, entry: getEntry(key),
+      draftMeal: null, editingMealId: null, pendingChip: null, showOtherForm: false,
+      showPoopForm: false, editingPoopLogId: null
+    });
   }
-
   function setDate(key) {
-    setState({ dateKey: key, entry: getEntry(key), activeFoodId: null, showPoopForm: false });
+    setState({
+      dateKey: key, entry: getEntry(key),
+      draftMeal: null, editingMealId: null, pendingChip: null, showOtherForm: false,
+      showPoopForm: false, editingPoopLogId: null
+    });
   }
 
+  // ---- foods CRUD ----
   function addFood() {
     var nameEl = document.getElementById('new-food-name');
     var calsEl = document.getElementById('new-food-cals');
@@ -141,32 +182,187 @@
     if (window.CharlieSync && window.CharlieSync.deleteFoodRemote) window.CharlieSync.deleteFoodRemote(id);
   }
 
-  function logFood(foodId) {
-    var food = state.foods.find(function (f) { return f.id === foodId; });
-    if (!food) return;
-    var cupsEl = document.getElementById('cups-input');
-    var cups = parseFloat(cupsEl.value);
-    if (isNaN(cups) || cups <= 0) return;
-    var calories = Math.round(cups * food.calsPerCup * 100) / 100;
-    var nutrients = computeNutrients(food, cups);
-    var next = Object.assign({}, state.entry, {
-      foodLogs: state.entry.foodLogs.concat([Object.assign({
-        id: uid(), time: nowTime(), foodId: food.id, foodName: food.name, cups: cups, calories: calories
-      }, nutrients)])
+  function startEditFood(id) { setState({ editingFoodId: id }); }
+  function cancelEditFood() { setState({ editingFoodId: null }); }
+  function saveEditFood(id) {
+    var nameEl = document.getElementById('edit-food-name-' + id);
+    var calsEl = document.getElementById('edit-food-cals-' + id);
+    var name = nameEl.value.trim();
+    var cals = parseFloat(calsEl.value);
+    if (!name || isNaN(cals) || cals <= 0) return;
+    if (!window.confirm('Save changes to this food? This won\'t change calories or nutrients already logged in the past.')) return;
+    var kcalKgEl = document.getElementById('edit-food-kcalkg-' + id);
+    var proteinEl = document.getElementById('edit-food-protein-' + id);
+    var fatEl = document.getElementById('edit-food-fat-' + id);
+    var fiberEl = document.getElementById('edit-food-fiber-' + id);
+    var kcalPerKg = kcalKgEl && kcalKgEl.value ? parseFloat(kcalKgEl.value) : null;
+    var proteinPct = proteinEl && proteinEl.value ? parseFloat(proteinEl.value) : null;
+    var fatPct = fatEl && fatEl.value ? parseFloat(fatEl.value) : null;
+    var fiberPct = fiberEl && fiberEl.value ? parseFloat(fiberEl.value) : null;
+    var updated = null;
+    var list = state.foods.map(function (f) {
+      if (f.id !== id) return f;
+      updated = Object.assign({}, f, {
+        name: name, calsPerCup: cals, updatedAt: Date.now(),
+        kcalPerKg: (kcalPerKg && kcalPerKg > 0) ? kcalPerKg : null,
+        proteinPct: (proteinPct != null && !isNaN(proteinPct)) ? proteinPct : null,
+        fatPct: (fatPct != null && !isNaN(fatPct)) ? fatPct : null,
+        fiberPct: (fiberPct != null && !isNaN(fiberPct)) ? fiberPct : null
+      });
+      updated.gramsPerCup = gramsPerCup(updated.calsPerCup, updated.kcalPerKg);
+      return updated;
     });
-    saveEntryLocal(state.dateKey, next);
-    setState({ entry: next, activeFoodId: null });
+    setFoods(list);
+    setState({ foods: list, editingFoodId: null });
+    if (updated && window.CharlieSync && window.CharlieSync.pushFood) window.CharlieSync.pushFood(updated);
   }
 
-  function deleteFoodLog(id) {
-    if (!window.confirm('Delete this food log entry? This can\'t be undone.')) return;
-    var next = Object.assign({}, state.entry, {
-      foodLogs: state.entry.foodLogs.filter(function (l) { return l.id !== id; })
+  // ---- supplements CRUD ----
+  function addSupplement() {
+    var nameEl = document.getElementById('new-supp-name');
+    var calsEl = document.getElementById('new-supp-cals');
+    var name = nameEl.value.trim();
+    if (!name) return;
+    var calsVal = calsEl.value ? parseFloat(calsEl.value) : null;
+    var supp = {
+      id: uid(), name: name,
+      calsPerPump: (calsVal != null && !isNaN(calsVal) && calsVal > 0) ? calsVal : null,
+      updatedAt: Date.now()
+    };
+    var list = state.supplements.concat([supp]);
+    setSupplements(list);
+    setState({ supplements: list });
+    if (window.CharlieSync && window.CharlieSync.pushSupplement) window.CharlieSync.pushSupplement(supp);
+  }
+
+  function deleteSupplement(id) {
+    var supp = state.supplements.find(function (s) { return s.id === id; });
+    var name = supp ? supp.name : 'this supplement';
+    if (!window.confirm('Remove ' + name + ' from Charlie\'s supplements? Past log entries that used it are kept as-is.')) return;
+    var list = state.supplements.filter(function (s) { return s.id !== id; });
+    setSupplements(list);
+    setState({ supplements: list });
+    if (window.CharlieSync && window.CharlieSync.deleteSupplementRemote) window.CharlieSync.deleteSupplementRemote(id);
+  }
+
+  function startEditSupplement(id) { setState({ editingSupplementId: id }); }
+  function cancelEditSupplement() { setState({ editingSupplementId: null }); }
+  function saveEditSupplement(id) {
+    var nameEl = document.getElementById('edit-supp-name-' + id);
+    var calsEl = document.getElementById('edit-supp-cals-' + id);
+    var name = nameEl.value.trim();
+    if (!name) return;
+    if (!window.confirm('Save changes to this supplement? This won\'t change amounts already logged in the past.')) return;
+    var calsVal = calsEl.value ? parseFloat(calsEl.value) : null;
+    var updated = null;
+    var list = state.supplements.map(function (s) {
+      if (s.id !== id) return s;
+      updated = Object.assign({}, s, {
+        name: name,
+        calsPerPump: (calsVal != null && !isNaN(calsVal) && calsVal > 0) ? calsVal : null,
+        updatedAt: Date.now()
+      });
+      return updated;
     });
+    setSupplements(list);
+    setState({ supplements: list, editingSupplementId: null });
+    if (updated && window.CharlieSync && window.CharlieSync.pushSupplement) window.CharlieSync.pushSupplement(updated);
+  }
+
+  // ---- building / editing a "bowl" (one time-stamped entry with several items) ----
+  function openChipPicker(type, id) {
+    var draft = state.draftMeal || { time: nowTime(), items: [] };
+    setState({ draftMeal: draft, pendingChip: { type: type, id: id }, showOtherForm: false });
+  }
+  function cancelPendingItem() { setState({ pendingChip: null }); }
+
+  function confirmPendingItem() {
+    var amountEl = document.getElementById('pending-amount-input');
+    var amount = parseFloat(amountEl.value);
+    if (isNaN(amount) || amount <= 0) return;
+    var item;
+    if (state.pendingChip.type === 'food') {
+      var food = state.foods.find(function (f) { return f.id === state.pendingChip.id; });
+      if (!food) return;
+      var nutrients = computeNutrients(food, amount);
+      item = Object.assign({
+        id: uid(), type: 'food', foodId: food.id, foodName: food.name,
+        cups: amount, calories: round2(amount * food.calsPerCup)
+      }, nutrients);
+    } else {
+      var supp = state.supplements.find(function (s) { return s.id === state.pendingChip.id; });
+      if (!supp) return;
+      item = {
+        id: uid(), type: 'supplement', supplementId: supp.id, supplementName: supp.name,
+        pumps: amount, calories: supp.calsPerPump != null ? round2(amount * supp.calsPerPump) : null
+      };
+    }
+    var draft = Object.assign({}, state.draftMeal, { items: state.draftMeal.items.concat([item]) });
+    setState({ draftMeal: draft, pendingChip: null });
+  }
+
+  function removeDraftItem(itemId) {
+    var draft = Object.assign({}, state.draftMeal, {
+      items: state.draftMeal.items.filter(function (it) { return it.id !== itemId; })
+    });
+    setState({ draftMeal: draft });
+  }
+
+  function toggleOtherForm() {
+    var opening = !state.showOtherForm;
+    var draft = opening ? (state.draftMeal || { time: nowTime(), items: [] }) : state.draftMeal;
+    setState({ showOtherForm: opening, draftMeal: draft, pendingChip: null });
+  }
+
+  function addOtherItem() {
+    var descEl = document.getElementById('draft-other-desc');
+    var desc = descEl.value.trim();
+    if (!desc) return;
+    var draft = Object.assign({}, state.draftMeal, {
+      items: state.draftMeal.items.concat([{ id: uid(), type: 'other', description: desc }])
+    });
+    setState({ draftMeal: draft, showOtherForm: false });
+  }
+
+  function saveMeal() {
+    if (!state.draftMeal || state.draftMeal.items.length === 0) return;
+    if (state.editingMealId) {
+      if (!window.confirm('Save changes to this entry?')) return;
+    }
+    var timeEl = document.getElementById('draft-time');
+    var time = (timeEl && timeEl.value) || state.draftMeal.time || nowTime();
+    var mealObj = { id: state.editingMealId || uid(), time: time, updatedAt: Date.now(), items: state.draftMeal.items };
+    var meals = state.editingMealId
+      ? state.entry.meals.map(function (m) { return m.id === state.editingMealId ? mealObj : m; })
+      : state.entry.meals.concat([mealObj]);
+    var next = Object.assign({}, state.entry, { meals: meals });
+    saveEntryLocal(state.dateKey, next);
+    setState({ entry: next, draftMeal: null, editingMealId: null, pendingChip: null, showOtherForm: false });
+  }
+
+  function cancelMeal() {
+    setState({ draftMeal: null, editingMealId: null, pendingChip: null, showOtherForm: false });
+  }
+
+  function startEditMeal(id) {
+    var meal = state.entry.meals.find(function (m) { return m.id === id; });
+    if (!meal) return;
+    setState({
+      editingMealId: id,
+      draftMeal: { time: meal.time, items: meal.items.map(function (it) { return Object.assign({}, it); }) },
+      pendingChip: null, showOtherForm: false
+    });
+  }
+
+  function deleteMeal(id) {
+    if (!window.confirm('Delete this entry? This can\'t be undone.')) return;
+    var meals = state.entry.meals.filter(function (m) { return m.id !== id; });
+    var next = Object.assign({}, state.entry, { meals: meals });
     saveEntryLocal(state.dateKey, next);
     setState({ entry: next });
   }
 
+  // ---- bathroom log ----
   function openPoopForm() {
     setState({ showPoopForm: true, poopSize: 'Typical', poopTexture: 'Solid', poopAbnormal: false, editingPoopLogId: null });
     setTimeout(function () {
@@ -201,6 +397,36 @@
     setState({ entry: next });
   }
 
+  function startEditPoopLog(id) {
+    var log = state.entry.poopLogs.find(function (l) { return l.id === id; });
+    if (!log) return;
+    setState({
+      editingPoopLogId: id, showPoopForm: false,
+      editPoopSize: log.size, editPoopTexture: log.texture, editPoopAbnormal: log.colorAbnormal
+    });
+  }
+  function cancelEditPoopLog() { setState({ editingPoopLogId: null }); }
+  function saveEditPoopLog(id) {
+    if (!window.confirm('Save changes to this bathroom entry?')) return;
+    var timeEl = document.getElementById('edit-poop-time-' + id);
+    var noteEl = document.getElementById('edit-poop-note-' + id);
+    var next = Object.assign({}, state.entry, {
+      poopLogs: state.entry.poopLogs.map(function (l) {
+        if (l.id !== id) return l;
+        return Object.assign({}, l, {
+          time: (timeEl && timeEl.value) || l.time,
+          size: state.editPoopSize,
+          texture: state.editPoopTexture,
+          colorAbnormal: state.editPoopAbnormal,
+          colorNote: state.editPoopAbnormal && noteEl ? noteEl.value.trim() : ''
+        });
+      })
+    });
+    saveEntryLocal(state.dateKey, next);
+    setState({ entry: next, editingPoopLogId: null });
+  }
+
+  // ---- reports ----
   function rangeKeys(granularity, anchorKey) {
     var anchor = fromKey(anchorKey);
     var start, end;
@@ -225,16 +451,46 @@
     setState({ reportRows: rows });
   }
 
+  function mealTotals(meal) {
+    var cal = 0, protein = null, fat = null, fiber = null;
+    meal.items.forEach(function (it) {
+      if (it.calories != null) cal += it.calories;
+      if (it.proteinG != null) protein = (protein || 0) + it.proteinG;
+      if (it.fatG != null) fat = (fat || 0) + it.fatG;
+      if (it.fiberG != null) fiber = (fiber || 0) + it.fiberG;
+    });
+    return { cal: cal, protein: protein, fat: fat, fiber: fiber };
+  }
+
+  function dayTotals(meals) {
+    var cal = 0, protein = null, fat = null, fiber = null;
+    meals.forEach(function (m) {
+      var t = mealTotals(m);
+      cal += t.cal;
+      if (t.protein != null) protein = (protein || 0) + t.protein;
+      if (t.fat != null) fat = (fat || 0) + t.fat;
+      if (t.fiber != null) fiber = (fiber || 0) + t.fiber;
+    });
+    return { cal: cal, protein: protein, fat: fat, fiber: fiber };
+  }
+
   function exportExcel() {
     var foodRows = [];
     var poopRows = [];
     state.reportRows.forEach(function (r) {
-      r.foodLogs.forEach(function (f) {
-        foodRows.push({
-          Date: r.date, Time: f.time, Food: f.foodName, Cups: f.cups, Calories: f.calories,
-          'Protein (g, est.)': f.proteinG != null ? f.proteinG : '',
-          'Fat (g, est.)': f.fatG != null ? f.fatG : '',
-          'Fiber (g, est.)': f.fiberG != null ? f.fiberG : ''
+      r.meals.forEach(function (m) {
+        m.items.forEach(function (it) {
+          var amount = it.type === 'food' ? it.cups + ' cups' : it.type === 'supplement' ? it.pumps + ' pumps' : '';
+          var name = it.type === 'food' ? it.foodName : it.type === 'supplement' ? it.supplementName : it.description;
+          foodRows.push({
+            Date: r.date, Time: m.time,
+            Type: it.type === 'food' ? 'Food' : it.type === 'supplement' ? 'Supplement' : 'Other (off-plan)',
+            Item: name, Amount: amount,
+            Calories: it.calories != null ? it.calories : '',
+            'Protein (g, est.)': it.proteinG != null ? it.proteinG : '',
+            'Fat (g, est.)': it.fatG != null ? it.fatG : '',
+            'Fiber (g, est.)': it.fiberG != null ? it.fiberG : ''
+          });
         });
       });
       r.poopLogs.forEach(function (p) {
@@ -246,7 +502,7 @@
     });
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
-      foodRows.length ? foodRows : [{ Date: '', Time: '', Food: '', Cups: '', Calories: '', 'Protein (g, est.)': '', 'Fat (g, est.)': '', 'Fiber (g, est.)': '' }]
+      foodRows.length ? foodRows : [{ Date: '', Time: '', Type: '', Item: '', Amount: '', Calories: '', 'Protein (g, est.)': '', 'Fat (g, est.)': '', 'Fiber (g, est.)': '' }]
     ), 'Food Log');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
       poopRows.length ? poopRows : [{ Date: '', Time: '', Size: '', Texture: '', Color: '', Notes: '' }]
@@ -261,120 +517,6 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }
-
-  // ---- edit: food log ----
-  function startEditFoodLog(id) {
-    setState({ editingFoodLogId: id, activeFoodId: null });
-  }
-  function cancelEditFoodLog() {
-    setState({ editingFoodLogId: null });
-  }
-  function saveEditFoodLog(id) {
-    var log = state.entry.foodLogs.find(function (l) { return l.id === id; });
-    if (!log) return;
-    var timeEl = document.getElementById('edit-food-log-time-' + id);
-    var cupsEl = document.getElementById('edit-food-log-cups-' + id);
-    var cups = parseFloat(cupsEl.value);
-    if (isNaN(cups) || cups <= 0) return;
-    if (!window.confirm('Save changes to this food log entry?')) return;
-    var food = state.foods.find(function (f) { return f.id === log.foodId; });
-    var calories, nutrients;
-    if (food) {
-      calories = Math.round(cups * food.calsPerCup * 100) / 100;
-      nutrients = computeNutrients(food, cups);
-    } else {
-      // the underlying food was deleted since this was logged — scale proportionally
-      // from what was recorded, so the entry stays sane instead of breaking.
-      var perCup = log.cups > 0 ? log.calories / log.cups : 0;
-      calories = Math.round(cups * perCup * 100) / 100;
-      var scale = log.cups > 0 ? cups / log.cups : 0;
-      nutrients = {
-        proteinG: log.proteinG != null ? round2(log.proteinG * scale) : null,
-        fatG: log.fatG != null ? round2(log.fatG * scale) : null,
-        fiberG: log.fiberG != null ? round2(log.fiberG * scale) : null
-      };
-    }
-    var next = Object.assign({}, state.entry, {
-      foodLogs: state.entry.foodLogs.map(function (l) {
-        if (l.id !== id) return l;
-        return Object.assign({}, l, { time: (timeEl && timeEl.value) || l.time, cups: cups, calories: calories }, nutrients);
-      })
-    });
-    saveEntryLocal(state.dateKey, next);
-    setState({ entry: next, editingFoodLogId: null });
-  }
-
-  // ---- edit: poop log ----
-  function startEditPoopLog(id) {
-    var log = state.entry.poopLogs.find(function (l) { return l.id === id; });
-    if (!log) return;
-    setState({
-      editingPoopLogId: id, showPoopForm: false,
-      editPoopSize: log.size, editPoopTexture: log.texture, editPoopAbnormal: log.colorAbnormal
-    });
-  }
-  function cancelEditPoopLog() {
-    setState({ editingPoopLogId: null });
-  }
-  function saveEditPoopLog(id) {
-    if (!window.confirm('Save changes to this bathroom entry?')) return;
-    var timeEl = document.getElementById('edit-poop-time-' + id);
-    var noteEl = document.getElementById('edit-poop-note-' + id);
-    var next = Object.assign({}, state.entry, {
-      poopLogs: state.entry.poopLogs.map(function (l) {
-        if (l.id !== id) return l;
-        return Object.assign({}, l, {
-          time: (timeEl && timeEl.value) || l.time,
-          size: state.editPoopSize,
-          texture: state.editPoopTexture,
-          colorAbnormal: state.editPoopAbnormal,
-          colorNote: state.editPoopAbnormal && noteEl ? noteEl.value.trim() : ''
-        });
-      })
-    });
-    saveEntryLocal(state.dateKey, next);
-    setState({ entry: next, editingPoopLogId: null });
-  }
-
-  // ---- edit: foods ----
-  function startEditFood(id) {
-    setState({ editingFoodId: id });
-  }
-  function cancelEditFood() {
-    setState({ editingFoodId: null });
-  }
-  function saveEditFood(id) {
-    var nameEl = document.getElementById('edit-food-name-' + id);
-    var calsEl = document.getElementById('edit-food-cals-' + id);
-    var name = nameEl.value.trim();
-    var cals = parseFloat(calsEl.value);
-    if (!name || isNaN(cals) || cals <= 0) return;
-    if (!window.confirm('Save changes to this food? This won\'t change calories or nutrients already logged in the past.')) return;
-    var kcalKgEl = document.getElementById('edit-food-kcalkg-' + id);
-    var proteinEl = document.getElementById('edit-food-protein-' + id);
-    var fatEl = document.getElementById('edit-food-fat-' + id);
-    var fiberEl = document.getElementById('edit-food-fiber-' + id);
-    var kcalPerKg = kcalKgEl && kcalKgEl.value ? parseFloat(kcalKgEl.value) : null;
-    var proteinPct = proteinEl && proteinEl.value ? parseFloat(proteinEl.value) : null;
-    var fatPct = fatEl && fatEl.value ? parseFloat(fatEl.value) : null;
-    var fiberPct = fiberEl && fiberEl.value ? parseFloat(fiberEl.value) : null;
-    var updated = null;
-    var list = state.foods.map(function (f) {
-      if (f.id !== id) return f;
-      updated = Object.assign({}, f, {
-        name: name, calsPerCup: cals, updatedAt: Date.now(),
-        kcalPerKg: (kcalPerKg && kcalPerKg > 0) ? kcalPerKg : null,
-        proteinPct: (proteinPct != null && !isNaN(proteinPct)) ? proteinPct : null,
-        fatPct: (fatPct != null && !isNaN(fatPct)) ? fatPct : null,
-        fiberPct: (fiberPct != null && !isNaN(fiberPct)) ? fiberPct : null
-      });
-      updated.gramsPerCup = gramsPerCup(updated.calsPerCup, updated.kcalPerKg);
-      return updated;
-    });
-    setFoods(list);
-    setState({ foods: list, editingFoodId: null });
-    if (updated && window.CharlieSync && window.CharlieSync.pushFood) window.CharlieSync.pushFood(updated);
   }
 
   // ---- icons (inline SVG, stroke uses currentColor). Every icon carries an
@@ -436,6 +578,97 @@
     return reportsHtml();
   }
 
+  function itemDescription(it) {
+    if (it.type === 'food') return it.cups + ' cup' + (it.cups === 1 ? '' : 's') + ' ' + esc(it.foodName);
+    if (it.type === 'supplement') return it.pumps + ' pump' + (it.pumps === 1 ? '' : 's') + ' ' + esc(it.supplementName);
+    return esc(it.description);
+  }
+
+  function chipRowsHtml() {
+    if (state.foods.length === 0 && state.supplements.length === 0) {
+      return '<div class="hint-box">No foods added yet. <button type="button" class="link" data-action="set-tab" data-value="foods">Add Charlie\'s food</button> to start logging.</div>';
+    }
+    var html = '';
+    if (state.foods.length) {
+      html += '<p class="mini-label">Foods</p><div class="chip-row">' + state.foods.map(function (f) {
+        var active = state.pendingChip && state.pendingChip.type === 'food' && state.pendingChip.id === f.id;
+        return '<button type="button" class="chip' + (active ? ' active' : '') + '" data-action="pick-chip" data-value="food:' + f.id + '">' + esc(f.name) + '</button>';
+      }).join('') + '</div>';
+    }
+    if (state.supplements.length) {
+      html += '<p class="mini-label">Supplements</p><div class="chip-row">' + state.supplements.map(function (s) {
+        var active = state.pendingChip && state.pendingChip.type === 'supplement' && state.pendingChip.id === s.id;
+        return '<button type="button" class="chip' + (active ? ' active' : '') + '" data-action="pick-chip" data-value="supplement:' + s.id + '">' + esc(s.name) + '</button>';
+      }).join('') + '</div>';
+    }
+    return html;
+  }
+
+  function pendingAmountFormHtml() {
+    if (!state.pendingChip) return '';
+    if (state.pendingChip.type === 'food') {
+      var food = state.foods.find(function (f) { return f.id === state.pendingChip.id; });
+      if (!food) return '';
+      return '<div class="inline-form">' +
+        '<div class="field"><label>Cups of ' + esc(food.name) + '</label><input type="number" step="0.25" min="0" id="pending-amount-input" placeholder="e.g. 0.75" /></div>' +
+        '<div class="preview-line" id="pending-preview">Enter cups to see calories</div>' +
+        '<div class="btn-row"><button type="button" class="btn-primary" data-action="confirm-pending-item">Add to entry</button>' +
+        '<button type="button" class="btn-secondary" data-action="cancel-pending-item">Cancel</button></div></div>';
+    }
+    var supp = state.supplements.find(function (s) { return s.id === state.pendingChip.id; });
+    if (!supp) return '';
+    return '<div class="inline-form">' +
+      '<div class="field"><label>Pumps of ' + esc(supp.name) + '</label><input type="number" step="1" min="0" id="pending-amount-input" placeholder="e.g. 3" /></div>' +
+      (supp.calsPerPump != null ? '<div class="preview-line" id="pending-preview">Enter pumps to see calories</div>' : '') +
+      '<div class="btn-row"><button type="button" class="btn-primary" data-action="confirm-pending-item">Add to entry</button>' +
+      '<button type="button" class="btn-secondary" data-action="cancel-pending-item">Cancel</button></div></div>';
+  }
+
+  function bowlPanelHtml() {
+    var draft = state.draftMeal;
+    var html = draft ? '<div class="bowl-panel">' : '';
+
+    if (draft) {
+      html += '<div class="field"><label>Time</label><input type="time" id="draft-time" value="' + draft.time + '" /></div>';
+      if (draft.items.length) {
+        html += '<ul class="draft-item-list">' + draft.items.map(function (it) {
+          return '<li><span class="' + (it.type === 'other' ? 'other-text' : '') + '">' + itemDescription(it) +
+            (it.calories != null ? ' — ' + it.calories + ' cal' : '') + '</span>' +
+            '<button type="button" class="delete-btn" data-action="remove-draft-item" data-value="' + it.id + '">' + ICONS.x + '</button></li>';
+        }).join('') + '</ul>';
+      }
+    }
+
+    html += chipRowsHtml();
+    html += pendingAmountFormHtml();
+
+    if (state.showOtherForm) {
+      html += '<div class="inline-form">' +
+        '<div class="field"><label>What happened</label><input type="text" id="draft-other-desc" placeholder="e.g. got into the trash" /></div>' +
+        '<div class="btn-row"><button type="button" class="btn-primary" data-action="add-other-item">Add to entry</button>' +
+        '<button type="button" class="btn-secondary" data-action="toggle-other-form">Cancel</button></div></div>';
+    } else {
+      html += '<button type="button" class="pill ghost" style="margin-top:8px;" data-action="toggle-other-form">' + ICONS.plus + ' Something he shouldn\'t have eaten</button>';
+    }
+
+    if (draft) {
+      html += '<div class="btn-row" style="margin-top:10px;"><button type="button" class="btn-primary" data-action="save-meal">Save entry</button>' +
+        '<button type="button" class="btn-secondary" data-action="cancel-meal">Cancel</button></div>';
+      html += '</div>';
+    }
+    return html;
+  }
+
+  function mealRowHtml(meal) {
+    var t = mealTotals(meal);
+    var summary = meal.items.map(itemDescription).join(', ');
+    return '<li><span>' + meal.time + ' — ' + summary + '</span>' +
+      '<span style="display:flex;align-items:center;gap:10px;">' +
+      '<span style="color:var(--ink-soft);">' + (t.cal ? t.cal.toFixed(2) + ' cal' : '') + '</span>' +
+      '<button type="button" class="delete-btn" data-action="edit-meal" data-value="' + meal.id + '">' + ICONS.edit + '</button>' +
+      '<button type="button" class="delete-btn" data-action="delete-meal" data-value="' + meal.id + '">' + ICONS.x + '</button></span></li>';
+  }
+
   function journalHtml() {
     var html = '<div class="date-nav">' +
       '<button class="arrow" data-action="shift-date" data-value="-1">' + ICONS.chevronLeft + '</button>' +
@@ -443,63 +676,24 @@
       '<input type="date" id="date-picker" value="' + state.dateKey + '" /></div>' +
       '<button class="arrow" data-action="shift-date" data-value="1">' + ICONS.chevronRight + '</button></div>';
 
-    var totalCal = state.entry.foodLogs.reduce(function (s, f) { return s + f.calories; }, 0);
-
-    // Food card
-    var totalProtein = null, totalFat = null, totalFiber = null;
-    state.entry.foodLogs.forEach(function (f) {
-      if (f.proteinG != null) totalProtein = (totalProtein || 0) + f.proteinG;
-      if (f.fatG != null) totalFat = (totalFat || 0) + f.fatG;
-      if (f.fiberG != null) totalFiber = (totalFiber || 0) + f.fiberG;
-    });
+    var totals = dayTotals(state.entry.meals);
     var nutrientParts = [];
-    if (totalProtein != null) nutrientParts.push(round2(totalProtein) + 'g protein');
-    if (totalFat != null) nutrientParts.push(round2(totalFat) + 'g fat');
-    if (totalFiber != null) nutrientParts.push(round2(totalFiber) + 'g fiber');
+    if (totals.protein != null) nutrientParts.push(round2(totals.protein) + 'g protein');
+    if (totals.fat != null) nutrientParts.push(round2(totals.fat) + 'g fat');
+    if (totals.fiber != null) nutrientParts.push(round2(totals.fiber) + 'g fiber');
     var nutrientLine = nutrientParts.length
       ? '<div style="font-size:13px;color:var(--ink-soft);margin-top:2px;">Estimated: ' + nutrientParts.join(' • ') + '</div>'
       : '';
 
-    html += '<section class="card"><div class="section-row"><h2>Food</h2><span style="color:var(--ink-soft);font-size:14px;">' + totalCal.toFixed(2) + ' cal today</span></div>' + nutrientLine;
+    html += '<section class="card"><div class="section-row"><h2>Food</h2><span style="color:var(--ink-soft);font-size:14px;">' + totals.cal.toFixed(2) + ' cal today</span></div>' + nutrientLine;
+    html += bowlPanelHtml();
 
-    if (state.foods.length === 0) {
-      html += '<div class="hint-box">No foods added yet. <button type="button" class="link" data-action="set-tab" data-value="foods">Add Charlie\'s food</button> to start logging.</div>';
-    } else {
-      html += '<div class="chip-row">' + state.foods.map(function (f) {
-        return '<button type="button" class="chip' + (state.activeFoodId === f.id ? ' active' : '') + '" data-action="toggle-food" data-value="' + f.id + '">' + esc(f.name) + '</button>';
-      }).join('') + '</div>';
-    }
-
-    if (state.activeFoodId) {
-      var food = state.foods.find(function (f) { return f.id === state.activeFoodId; });
-      if (food) {
-        html += '<div class="inline-form">' +
-          '<div class="field"><label>Cups of ' + esc(food.name) + '</label>' +
-          '<input type="number" step="0.25" min="0" id="cups-input" placeholder="e.g. 0.75" /></div>' +
-          '<div class="preview-line" id="cal-preview">Enter cups to see calories</div>' +
-          '<div class="btn-row"><button type="button" class="btn-primary" data-action="log-food" data-value="' + food.id + '">Log entry</button>' +
-          '<button type="button" class="btn-secondary" data-action="cancel-food">Cancel</button></div></div>';
-      }
-    }
-
+    var savedMeals = state.entry.meals.filter(function (m) { return m.id !== state.editingMealId; });
     html += '<ul class="log-list">';
-    if (state.entry.foodLogs.length === 0) {
+    if (savedMeals.length === 0) {
       html += '<li class="log-empty">No food logged today.</li>';
     } else {
-      html += state.entry.foodLogs.map(function (f) {
-        if (f.id === state.editingFoodLogId) {
-          return '<li class="log-edit-row"><div class="inline-form">' +
-            '<div class="field"><label>Time</label><input type="time" id="edit-food-log-time-' + f.id + '" value="' + f.time + '" /></div>' +
-            '<div class="field"><label>Cups of ' + esc(f.foodName) + '</label>' +
-            '<input type="number" step="0.25" min="0" id="edit-food-log-cups-' + f.id + '" value="' + f.cups + '" /></div>' +
-            '<div class="btn-row"><button type="button" class="btn-primary" data-action="save-edit-food-log" data-value="' + f.id + '">Save</button>' +
-            '<button type="button" class="btn-secondary" data-action="cancel-edit-food-log">Cancel</button></div></div></li>';
-        }
-        return '<li><span>' + f.time + ' — ' + esc(f.foodName) + ', ' + f.cups + ' cups</span>' +
-          '<span style="display:flex;align-items:center;gap:10px;"><span style="color:var(--ink-soft);">' + f.calories + ' cal</span>' +
-          '<button type="button" class="delete-btn" data-action="edit-food-log" data-value="' + f.id + '">' + ICONS.edit + '</button>' +
-          '<button type="button" class="delete-btn" data-action="delete-food-log" data-value="' + f.id + '">' + ICONS.x + '</button></span></li>';
-      }).join('');
+      html += savedMeals.map(mealRowHtml).join('');
     }
     html += '</ul></section>';
 
@@ -611,6 +805,32 @@
     }
     html += '</ul></section>';
 
+    html += '<section class="card"><h2 style="margin-bottom:12px;">Charlie\'s supplements</h2>' +
+      '<div class="inline-form">' +
+      '<div class="field"><label>Supplement name</label><input type="text" id="new-supp-name" placeholder="e.g. Fish Oil" /></div>' +
+      '<div class="field"><label>Calories per pump (optional)</label><input type="number" step="0.1" min="0" id="new-supp-cals" placeholder="e.g. 17" /></div>' +
+      '<button type="button" class="btn-primary" style="width:100%;" data-action="add-supplement">Add supplement</button></div>';
+
+    html += '<ul class="log-list">';
+    if (state.supplements.length === 0) {
+      html += '<li class="log-empty">No supplements yet.</li>';
+    } else {
+      html += state.supplements.map(function (s) {
+        if (s.id === state.editingSupplementId) {
+          return '<li class="log-edit-row"><div class="inline-form">' +
+            '<div class="field"><label>Supplement name</label><input type="text" id="edit-supp-name-' + s.id + '" value="' + esc(s.name) + '" /></div>' +
+            '<div class="field"><label>Calories per pump (optional)</label><input type="number" step="0.1" min="0" id="edit-supp-cals-' + s.id + '" value="' + (s.calsPerPump != null ? s.calsPerPump : '') + '" /></div>' +
+            '<div class="btn-row"><button type="button" class="btn-primary" data-action="save-edit-supplement" data-value="' + s.id + '">Save</button>' +
+            '<button type="button" class="btn-secondary" data-action="cancel-edit-supplement">Cancel</button></div></div></li>';
+        }
+        return '<li><span>' + esc(s.name) + (s.calsPerPump != null ? ' — ' + s.calsPerPump + ' cal/pump' : '') + '</span>' +
+          '<span style="display:flex;align-items:center;gap:10px;">' +
+          '<button type="button" class="delete-btn" data-action="edit-supplement" data-value="' + s.id + '">' + ICONS.edit + '</button>' +
+          '<button type="button" class="delete-btn" data-action="delete-supplement" data-value="' + s.id + '">' + ICONS.x + '</button></span></li>';
+      }).join('');
+    }
+    html += '</ul></section>';
+
     html += '<section class="card"><h2 style="margin-bottom:8px;">Account</h2>' +
       '<p style="font-size:14px;color:var(--ink-soft);margin:0 0 12px;">Charlie\'s log is backed up automatically while you\'re signed in.</p>' +
       '<button type="button" class="btn-secondary" style="width:100%;" data-action="sign-out">Sign out</button></section>';
@@ -631,18 +851,12 @@
 
     html += '<section class="card"><div class="table-wrap"><table class="report-table"><thead><tr><th>Date</th><th>Cal</th><th>Protein</th><th>Fat</th><th>Fiber</th><th>BMs</th><th>Abnormal</th></tr></thead><tbody>';
     state.reportRows.forEach(function (r) {
-      var cal = r.foodLogs.reduce(function (s, f) { return s + f.calories; }, 0);
-      var protein = null, fat = null, fiber = null;
-      r.foodLogs.forEach(function (f) {
-        if (f.proteinG != null) protein = (protein || 0) + f.proteinG;
-        if (f.fatG != null) fat = (fat || 0) + f.fatG;
-        if (f.fiberG != null) fiber = (fiber || 0) + f.fiberG;
-      });
+      var t = dayTotals(r.meals);
       var abnormal = r.poopLogs.filter(function (p) { return p.colorAbnormal; }).length;
-      html += '<tr><td>' + r.date + '</td><td>' + (cal ? cal.toFixed(2) : '—') + '</td>' +
-        '<td>' + (protein != null ? round2(protein) + 'g' : '—') + '</td>' +
-        '<td>' + (fat != null ? round2(fat) + 'g' : '—') + '</td>' +
-        '<td>' + (fiber != null ? round2(fiber) + 'g' : '—') + '</td>' +
+      html += '<tr><td>' + r.date + '</td><td>' + (t.cal ? t.cal.toFixed(2) : '—') + '</td>' +
+        '<td>' + (t.protein != null ? round2(t.protein) + 'g' : '—') + '</td>' +
+        '<td>' + (t.fat != null ? round2(t.fat) + 'g' : '—') + '</td>' +
+        '<td>' + (t.fiber != null ? round2(t.fiber) + 'g' : '—') + '</td>' +
         '<td>' + (r.poopLogs.length || '—') + '</td>' +
         '<td class="' + (abnormal > 0 ? 'abnormal' : '') + '">' + (abnormal > 0 ? abnormal : '—') + '</td></tr>';
     });
@@ -665,19 +879,28 @@
           if (value === 'reports') loadReport();
           break;
         case 'shift-date': shiftDate(parseInt(value, 10)); break;
-        case 'toggle-food': setState({ activeFoodId: state.activeFoodId === value ? null : value, editingFoodLogId: null }); break;
-        case 'cancel-food': setState({ activeFoodId: null }); break;
-        case 'log-food': logFood(value); break;
+
+        case 'pick-chip': {
+          var parts = value.split(':');
+          openChipPicker(parts[0], parts[1]);
+          break;
+        }
+        case 'cancel-pending-item': cancelPendingItem(); break;
+        case 'confirm-pending-item': confirmPendingItem(); break;
+        case 'remove-draft-item': removeDraftItem(value); break;
+        case 'toggle-other-form': toggleOtherForm(); break;
+        case 'add-other-item': addOtherItem(); break;
+        case 'save-meal': saveMeal(); break;
+        case 'cancel-meal': cancelMeal(); break;
+        case 'edit-meal': startEditMeal(value); break;
+        case 'delete-meal': deleteMeal(value); break;
+
         case 'open-poop-form': openPoopForm(); break;
         case 'cancel-poop': setState({ showPoopForm: false }); break;
         case 'log-poop': logPoop(); break;
         case 'set-poop-size': setState({ poopSize: value }); break;
         case 'set-poop-texture': setState({ poopTexture: value }); break;
         case 'set-poop-color': setState({ poopAbnormal: value === 'Abnormal' }); break;
-        case 'delete-food-log': deleteFoodLog(value); break;
-        case 'edit-food-log': startEditFoodLog(value); break;
-        case 'cancel-edit-food-log': cancelEditFoodLog(); break;
-        case 'save-edit-food-log': saveEditFoodLog(value); break;
         case 'delete-poop-log': deletePoopLog(value); break;
         case 'edit-poop-log': startEditPoopLog(value); break;
         case 'cancel-edit-poop-log': cancelEditPoopLog(); break;
@@ -685,12 +908,20 @@
         case 'set-edit-poop-size': setState({ editPoopSize: value }); break;
         case 'set-edit-poop-texture': setState({ editPoopTexture: value }); break;
         case 'set-edit-poop-color': setState({ editPoopAbnormal: value === 'Abnormal' }); break;
+
         case 'add-food': addFood(); break;
         case 'toggle-add-nutrition': setState({ showAddNutrition: !state.showAddNutrition }); break;
         case 'delete-food': deleteFood(value); break;
         case 'edit-food': startEditFood(value); break;
         case 'cancel-edit-food': cancelEditFood(); break;
         case 'save-edit-food': saveEditFood(value); break;
+
+        case 'add-supplement': addSupplement(); break;
+        case 'delete-supplement': deleteSupplement(value); break;
+        case 'edit-supplement': startEditSupplement(value); break;
+        case 'cancel-edit-supplement': cancelEditSupplement(); break;
+        case 'save-edit-supplement': saveEditSupplement(value); break;
+
         case 'set-granularity':
           setState({ reportGranularity: value });
           loadReport();
@@ -714,17 +945,6 @@
       loadReport();
     };
 
-    var cupsInput = document.getElementById('cups-input');
-    if (cupsInput) cupsInput.oninput = function () {
-      var cups = parseFloat(this.value);
-      var food = state.foods.find(function (f) { return f.id === state.activeFoodId; });
-      var preview = document.getElementById('cal-preview');
-      if (!preview || !food) return;
-      if (isNaN(cups)) { preview.textContent = 'Enter cups to see calories'; return; }
-      var cal = Math.round(cups * food.calsPerCup * 100) / 100;
-      preview.innerHTML = cups + ' cups × ' + food.calsPerCup + ' cal/cup = <strong>' + cal + ' cal</strong>';
-    };
-
     bindGramsPreview('new-food-cals', 'new-food-kcalkg', 'new-food-gpc-preview');
     if (state.editingFoodId) {
       bindGramsPreview(
@@ -733,6 +953,7 @@
         'edit-food-gpc-preview-' + state.editingFoodId
       );
     }
+    bindPendingPreview();
   }
 
   function bindGramsPreview(calsId, kcalId, previewId) {
@@ -750,11 +971,32 @@
     kcalEl.oninput = update;
   }
 
+  function bindPendingPreview() {
+    var input = document.getElementById('pending-amount-input');
+    var preview = document.getElementById('pending-preview');
+    if (!input || !preview || !state.pendingChip) return;
+    input.oninput = function () {
+      var amt = parseFloat(this.value);
+      if (state.pendingChip.type === 'food') {
+        var food = state.foods.find(function (f) { return f.id === state.pendingChip.id; });
+        if (!food || isNaN(amt)) { preview.textContent = 'Enter cups to see calories'; return; }
+        var cal = round2(amt * food.calsPerCup);
+        preview.innerHTML = amt + ' cups × ' + food.calsPerCup + ' cal/cup = <strong>' + cal + ' cal</strong>';
+      } else {
+        var supp = state.supplements.find(function (s) { return s.id === state.pendingChip.id; });
+        if (!supp || isNaN(amt) || supp.calsPerPump == null) { preview.textContent = 'Enter pumps to see calories'; return; }
+        var cal2 = round2(amt * supp.calsPerPump);
+        preview.innerHTML = amt + ' pumps × ' + supp.calsPerPump + ' cal/pump = <strong>' + cal2 + ' cal</strong>';
+      }
+    };
+  }
+
   // exposed so sync.js can ask for a re-render after pulling/merging remote data
   window.CharlieApp = {
     refresh: function () {
       state.entry = getEntry(state.dateKey);
       state.foods = getFoods();
+      state.supplements = getSupplements();
       if (state.tab === 'reports') loadReport(); else render();
     }
   };

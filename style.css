@@ -25,7 +25,7 @@ html, body {
   background-color: var(--sky-50);
   background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22220%22%20height%3D%22220%22%20viewBox%3D%220%200%20220%20220%22%3E%0A%20%20%3Cg%20fill%3D%22%23BFE2F5%22%3E%0A%20%20%20%20%3Cg%20transform%3D%22translate%2824%2C150%29%20scale%282.1%29%22%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2212%22%20cy%3D%2216.2%22%20rx%3D%224.6%22%20ry%3D%224%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%225.6%22%20cy%3D%2210.8%22%20rx%3D%222.1%22%20ry%3D%222.6%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%229.6%22%20cy%3D%227.4%22%20rx%3D%222.1%22%20ry%3D%222.8%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2214.4%22%20cy%3D%227.4%22%20rx%3D%222.1%22%20ry%3D%222.8%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2218.4%22%20cy%3D%2210.8%22%20rx%3D%222.1%22%20ry%3D%222.6%22%2F%3E%0A%20%20%20%20%3C%2Fg%3E%0A%20%20%20%20%3Cg%20transform%3D%22translate%28150%2C26%29%20scale%281.7%29%20rotate%2818%2012%2012%29%22%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2212%22%20cy%3D%2216.2%22%20rx%3D%224.6%22%20ry%3D%224%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%225.6%22%20cy%3D%2210.8%22%20rx%3D%222.1%22%20ry%3D%222.6%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%229.6%22%20cy%3D%227.4%22%20rx%3D%222.1%22%20ry%3D%222.8%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2214.4%22%20cy%3D%227.4%22%20rx%3D%222.1%22%20ry%3D%222.8%22%2F%3E%0A%20%20%20%20%20%20%3Cellipse%20cx%3D%2218.4%22%20cy%3D%2210.8%22%20rx%3D%222.1%22%20ry%3D%222.6%22%2F%3E%0A%20%20%20%20%3C%2Fg%3E%0A%20%20%20%20%3Cpath%20transform%3D%22translate%28150%2C150%29%20scale%281.6%29%22%20d%3D%22M12%2021s-7.5-4.35-10-9C.5%208.5%203%205%207%205c2.2%200%203.8%201.1%205%202.6C13.2%206.1%2014.8%205%2017%205c4%200%206.5%203.5%205%207-2.5%204.65-10%209-10%209z%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%3C%2Fsvg%3E");
   background-repeat: repeat;
-  background-attachment: fixed;
+  background-size: 220px 220px;
   color: var(--ink);
   font-family: 'Nunito', sans-serif;
   -webkit-tap-highlight-color: transparent;
@@ -464,6 +464,28 @@ table.report-table td.abnormal { color: var(--amber); font-weight: 700; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .segmented { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.mini-label { font-size: 12px; font-weight: 700; color: var(--ink-soft); margin: 10px 0 6px; }
+.bowl-panel {
+  border: 1px solid var(--sky-200);
+  background: var(--sky-50);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.bowl-panel .mini-label:first-child { margin-top: 0; }
+.draft-item-list { list-style: none; margin: 0 0 10px; padding: 0; }
+.draft-item-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 14px;
+  border-bottom: 1px solid var(--sky-100);
+}
+.draft-item-list li:last-child { border-bottom: none; }
+.other-text { font-style: italic; color: var(--ink-soft); }
 
 .hidden { display: none !important; }
 
