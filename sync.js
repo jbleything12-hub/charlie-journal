@@ -56,6 +56,11 @@
       id: food.id,
       name: food.name,
       cals_per_cup: food.calsPerCup,
+      kcal_per_kg: food.kcalPerKg != null ? food.kcalPerKg : null,
+      protein_pct: food.proteinPct != null ? food.proteinPct : null,
+      fat_pct: food.fatPct != null ? food.fatPct : null,
+      fiber_pct: food.fiberPct != null ? food.fiberPct : null,
+      grams_per_cup: food.gramsPerCup != null ? food.gramsPerCup : null,
       updated_at: new Date(food.updatedAt || Date.now()).toISOString()
     }).then(function (res) { return !res.error; }).catch(function () { return false; });
   }
@@ -130,7 +135,14 @@
       var entriesRes = results[1];
 
       var remoteFoods = (foodsRes.data || []).map(function (r) {
-        return { id: r.id, name: r.name, calsPerCup: Number(r.cals_per_cup), updatedAt: new Date(r.updated_at).getTime() };
+        return {
+          id: r.id, name: r.name, calsPerCup: Number(r.cals_per_cup), updatedAt: new Date(r.updated_at).getTime(),
+          kcalPerKg: r.kcal_per_kg != null ? Number(r.kcal_per_kg) : null,
+          proteinPct: r.protein_pct != null ? Number(r.protein_pct) : null,
+          fatPct: r.fat_pct != null ? Number(r.fat_pct) : null,
+          fiberPct: r.fiber_pct != null ? Number(r.fiber_pct) : null,
+          gramsPerCup: r.grams_per_cup != null ? Number(r.grams_per_cup) : null
+        };
       });
       var mergedFoods = mergeFoods(getLocalFoods(), remoteFoods);
       setLocalFoods(mergedFoods);

@@ -22,6 +22,27 @@
     });
   };
 
+  var round2 = function (n) { return Math.round(n * 100) / 100; };
+  // grams of food in one cup, derived from the two calorie numbers every dog
+  // food label already prints (kcal/kg and kcal/cup) — no scale needed.
+  var gramsPerCup = function (calsPerCup, kcalPerKg) {
+    if (!kcalPerKg || kcalPerKg <= 0 || !calsPerCup) return null;
+    return round2((calsPerCup / kcalPerKg) * 1000);
+  };
+  // estimated grams of a nutrient for a given number of cups, or null if the
+  // food doesn't have that nutrient's guaranteed-analysis % on file.
+  var nutrientGrams = function (food, cups, pctField) {
+    if (!food.gramsPerCup || food[pctField] == null) return null;
+    return round2(cups * food.gramsPerCup * (food[pctField] / 100));
+  };
+  var computeNutrients = function (food, cups) {
+    return {
+      proteinG: nutrientGrams(food, cups, 'proteinPct'),
+      fatG: nutrientGrams(food, cups, 'fatPct'),
+      fiberG: nutrientGrams(food, cups, 'fiberPct')
+    };
+  };
+
   // ---- storage ----
   function getFoods() {
     try { return JSON.parse(localStorage.getItem('charlie:foods') || '[]'); } catch (e) { return []; }
@@ -58,6 +79,7 @@
     editPoopTexture: 'Solid',
     editPoopAbnormal: false,
     editingFoodId: null,
+    showAddNutrition: false,
     error: '',
     reportGranularity: 'week',
     reportAnchor: toKey(new Date()),
@@ -87,10 +109,25 @@
     var name = nameEl.value.trim();
     var cals = parseFloat(calsEl.value);
     if (!name || isNaN(cals) || cals <= 0) return;
-    var food = { id: uid(), name: name, calsPerCup: cals, updatedAt: Date.now() };
+    var kcalKgEl = document.getElementById('new-food-kcalkg');
+    var proteinEl = document.getElementById('new-food-protein');
+    var fatEl = document.getElementById('new-food-fat');
+    var fiberEl = document.getElementById('new-food-fiber');
+    var kcalPerKg = kcalKgEl && kcalKgEl.value ? parseFloat(kcalKgEl.value) : null;
+    var proteinPct = proteinEl && proteinEl.value ? parseFloat(proteinEl.value) : null;
+    var fatPct = fatEl && fatEl.value ? parseFloat(fatEl.value) : null;
+    var fiberPct = fiberEl && fiberEl.value ? parseFloat(fiberEl.value) : null;
+    var food = {
+      id: uid(), name: name, calsPerCup: cals, updatedAt: Date.now(),
+      kcalPerKg: (kcalPerKg && kcalPerKg > 0) ? kcalPerKg : null,
+      proteinPct: (proteinPct != null && !isNaN(proteinPct)) ? proteinPct : null,
+      fatPct: (fatPct != null && !isNaN(fatPct)) ? fatPct : null,
+      fiberPct: (fiberPct != null && !isNaN(fiberPct)) ? fiberPct : null
+    };
+    food.gramsPerCup = gramsPerCup(food.calsPerCup, food.kcalPerKg);
     var list = state.foods.concat([food]);
     setFoods(list);
-    setState({ foods: list });
+    setState({ foods: list, showAddNutrition: false });
     if (window.CharlieSync && window.CharlieSync.pushFood) window.CharlieSync.pushFood(food);
   }
 
@@ -111,10 +148,11 @@
     var cups = parseFloat(cupsEl.value);
     if (isNaN(cups) || cups <= 0) return;
     var calories = Math.round(cups * food.calsPerCup * 100) / 100;
+    var nutrients = computeNutrients(food, cups);
     var next = Object.assign({}, state.entry, {
-      foodLogs: state.entry.foodLogs.concat([{
+      foodLogs: state.entry.foodLogs.concat([Object.assign({
         id: uid(), time: nowTime(), foodId: food.id, foodName: food.name, cups: cups, calories: calories
-      }])
+      }, nutrients)])
     });
     saveEntryLocal(state.dateKey, next);
     setState({ entry: next, activeFoodId: null });
@@ -192,7 +230,12 @@
     var poopRows = [];
     state.reportRows.forEach(function (r) {
       r.foodLogs.forEach(function (f) {
-        foodRows.push({ Date: r.date, Time: f.time, Food: f.foodName, Cups: f.cups, Calories: f.calories });
+        foodRows.push({
+          Date: r.date, Time: f.time, Food: f.foodName, Cups: f.cups, Calories: f.calories,
+          'Protein (g, est.)': f.proteinG != null ? f.proteinG : '',
+          'Fat (g, est.)': f.fatG != null ? f.fatG : '',
+          'Fiber (g, est.)': f.fiberG != null ? f.fiberG : ''
+        });
       });
       r.poopLogs.forEach(function (p) {
         poopRows.push({
@@ -203,7 +246,7 @@
     });
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
-      foodRows.length ? foodRows : [{ Date: '', Time: '', Food: '', Cups: '', Calories: '' }]
+      foodRows.length ? foodRows : [{ Date: '', Time: '', Food: '', Cups: '', Calories: '', 'Protein (g, est.)': '', 'Fat (g, est.)': '', 'Fiber (g, est.)': '' }]
     ), 'Food Log');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
       poopRows.length ? poopRows : [{ Date: '', Time: '', Size: '', Texture: '', Color: '', Notes: '' }]
@@ -236,19 +279,26 @@
     if (isNaN(cups) || cups <= 0) return;
     if (!window.confirm('Save changes to this food log entry?')) return;
     var food = state.foods.find(function (f) { return f.id === log.foodId; });
-    var calories;
+    var calories, nutrients;
     if (food) {
       calories = Math.round(cups * food.calsPerCup * 100) / 100;
+      nutrients = computeNutrients(food, cups);
     } else {
       // the underlying food was deleted since this was logged — scale proportionally
       // from what was recorded, so the entry stays sane instead of breaking.
       var perCup = log.cups > 0 ? log.calories / log.cups : 0;
       calories = Math.round(cups * perCup * 100) / 100;
+      var scale = log.cups > 0 ? cups / log.cups : 0;
+      nutrients = {
+        proteinG: log.proteinG != null ? round2(log.proteinG * scale) : null,
+        fatG: log.fatG != null ? round2(log.fatG * scale) : null,
+        fiberG: log.fiberG != null ? round2(log.fiberG * scale) : null
+      };
     }
     var next = Object.assign({}, state.entry, {
       foodLogs: state.entry.foodLogs.map(function (l) {
         if (l.id !== id) return l;
-        return Object.assign({}, l, { time: (timeEl && timeEl.value) || l.time, cups: cups, calories: calories });
+        return Object.assign({}, l, { time: (timeEl && timeEl.value) || l.time, cups: cups, calories: calories }, nutrients);
       })
     });
     saveEntryLocal(state.dateKey, next);
@@ -300,11 +350,26 @@
     var name = nameEl.value.trim();
     var cals = parseFloat(calsEl.value);
     if (!name || isNaN(cals) || cals <= 0) return;
-    if (!window.confirm('Save changes to this food? This won\'t change calories already logged in the past.')) return;
+    if (!window.confirm('Save changes to this food? This won\'t change calories or nutrients already logged in the past.')) return;
+    var kcalKgEl = document.getElementById('edit-food-kcalkg-' + id);
+    var proteinEl = document.getElementById('edit-food-protein-' + id);
+    var fatEl = document.getElementById('edit-food-fat-' + id);
+    var fiberEl = document.getElementById('edit-food-fiber-' + id);
+    var kcalPerKg = kcalKgEl && kcalKgEl.value ? parseFloat(kcalKgEl.value) : null;
+    var proteinPct = proteinEl && proteinEl.value ? parseFloat(proteinEl.value) : null;
+    var fatPct = fatEl && fatEl.value ? parseFloat(fatEl.value) : null;
+    var fiberPct = fiberEl && fiberEl.value ? parseFloat(fiberEl.value) : null;
     var updated = null;
     var list = state.foods.map(function (f) {
       if (f.id !== id) return f;
-      updated = Object.assign({}, f, { name: name, calsPerCup: cals, updatedAt: Date.now() });
+      updated = Object.assign({}, f, {
+        name: name, calsPerCup: cals, updatedAt: Date.now(),
+        kcalPerKg: (kcalPerKg && kcalPerKg > 0) ? kcalPerKg : null,
+        proteinPct: (proteinPct != null && !isNaN(proteinPct)) ? proteinPct : null,
+        fatPct: (fatPct != null && !isNaN(fatPct)) ? fatPct : null,
+        fiberPct: (fiberPct != null && !isNaN(fiberPct)) ? fiberPct : null
+      });
+      updated.gramsPerCup = gramsPerCup(updated.calsPerCup, updated.kcalPerKg);
       return updated;
     });
     setFoods(list);
@@ -381,7 +446,21 @@
     var totalCal = state.entry.foodLogs.reduce(function (s, f) { return s + f.calories; }, 0);
 
     // Food card
-    html += '<section class="card"><div class="section-row"><h2>Food</h2><span style="color:var(--ink-soft);font-size:14px;">' + totalCal.toFixed(2) + ' cal today</span></div>';
+    var totalProtein = null, totalFat = null, totalFiber = null;
+    state.entry.foodLogs.forEach(function (f) {
+      if (f.proteinG != null) totalProtein = (totalProtein || 0) + f.proteinG;
+      if (f.fatG != null) totalFat = (totalFat || 0) + f.fatG;
+      if (f.fiberG != null) totalFiber = (totalFiber || 0) + f.fiberG;
+    });
+    var nutrientParts = [];
+    if (totalProtein != null) nutrientParts.push(round2(totalProtein) + 'g protein');
+    if (totalFat != null) nutrientParts.push(round2(totalFat) + 'g fat');
+    if (totalFiber != null) nutrientParts.push(round2(totalFiber) + 'g fiber');
+    var nutrientLine = nutrientParts.length
+      ? '<div style="font-size:13px;color:var(--ink-soft);margin-top:2px;">Estimated: ' + nutrientParts.join(' • ') + '</div>'
+      : '';
+
+    html += '<section class="card"><div class="section-row"><h2>Food</h2><span style="color:var(--ink-soft);font-size:14px;">' + totalCal.toFixed(2) + ' cal today</span></div>' + nutrientLine;
 
     if (state.foods.length === 0) {
       html += '<div class="hint-box">No foods added yet. <button type="button" class="link" data-action="set-tab" data-value="foods">Add Charlie\'s food</button> to start logging.</div>';
@@ -471,12 +550,45 @@
     return html;
   }
 
+  function nutritionFieldsHtml(idFn, food) {
+    var kcal = food && food.kcalPerKg != null ? food.kcalPerKg : '';
+    var protein = food && food.proteinPct != null ? food.proteinPct : '';
+    var fat = food && food.fatPct != null ? food.fatPct : '';
+    var fiber = food && food.fiberPct != null ? food.fiberPct : '';
+    var gpc = food && food.gramsPerCup ? food.gramsPerCup : null;
+    return '<div class="field"><label>Calories per kg (optional — from the label)</label>' +
+      '<input type="number" step="1" min="0" id="' + idFn('kcalkg') + '" value="' + kcal + '" placeholder="e.g. 3641" /></div>' +
+      '<div class="preview-line" id="' + idFn('gpc-preview') + '">' +
+      (gpc ? '≈' + gpc + 'g per cup' : 'Add this and calories/cup to see grams per cup') +
+      '</div>' +
+      '<div class="field"><label>Protein % (min, optional)</label><input type="number" step="0.1" min="0" id="' + idFn('protein') + '" value="' + protein + '" placeholder="e.g. 30" /></div>' +
+      '<div class="field"><label>Fat % (min, optional)</label><input type="number" step="0.1" min="0" id="' + idFn('fat') + '" value="' + fat + '" placeholder="e.g. 18" /></div>' +
+      '<div class="field"><label>Fiber % (max, optional)</label><input type="number" step="0.1" min="0" id="' + idFn('fiber') + '" value="' + fiber + '" placeholder="e.g. 5.5" /></div>';
+  }
+
+  function foodNutrientSubtext(f) {
+    if (!f.gramsPerCup) return '';
+    var parts = [];
+    var p = nutrientGrams(f, 1, 'proteinPct'); if (p != null) parts.push(p + 'g protein');
+    var fa = nutrientGrams(f, 1, 'fatPct'); if (fa != null) parts.push(fa + 'g fat');
+    var fi = nutrientGrams(f, 1, 'fiberPct'); if (fi != null) parts.push(fi + 'g fiber');
+    if (!parts.length) return '';
+    return '<div style="font-size:12px;color:var(--ink-faint);margin-top:2px;">' + parts.join(' • ') + ' per cup (est.)</div>';
+  }
+
   function foodsHtml() {
     var html = '<section class="card"><h2 style="margin-bottom:12px;">Charlie\'s foods</h2>' +
       '<div class="inline-form">' +
       '<div class="field"><label>Food name</label><input type="text" id="new-food-name" placeholder="e.g. Salmon LID" /></div>' +
-      '<div class="field"><label>Calories per cup</label><input type="number" step="0.01" min="0" id="new-food-cals" placeholder="e.g. 413" /></div>' +
-      '<button type="button" class="btn-primary" style="width:100%;" data-action="add-food">Add food</button></div>';
+      '<div class="field"><label>Calories per cup</label><input type="number" step="0.01" min="0" id="new-food-cals" placeholder="e.g. 413" /></div>';
+
+    if (state.showAddNutrition) {
+      html += nutritionFieldsHtml(function (f) { return 'new-food-' + f; }, null) +
+        '<button type="button" class="btn-secondary" style="width:100%;" data-action="toggle-add-nutrition">Hide nutrition info</button>';
+    } else {
+      html += '<button type="button" class="btn-secondary" style="width:100%;" data-action="toggle-add-nutrition">' + ICONS.plus + ' Add nutrition info (optional)</button>';
+    }
+    html += '<button type="button" class="btn-primary" style="width:100%;" data-action="add-food">Add food</button></div>';
 
     html += '<ul class="log-list">';
     if (state.foods.length === 0) {
@@ -487,10 +599,11 @@
           return '<li class="log-edit-row"><div class="inline-form">' +
             '<div class="field"><label>Food name</label><input type="text" id="edit-food-name-' + f.id + '" value="' + esc(f.name) + '" /></div>' +
             '<div class="field"><label>Calories per cup</label><input type="number" step="0.01" min="0" id="edit-food-cals-' + f.id + '" value="' + f.calsPerCup + '" /></div>' +
+            nutritionFieldsHtml(function (field) { return 'edit-food-' + field + '-' + f.id; }, f) +
             '<div class="btn-row"><button type="button" class="btn-primary" data-action="save-edit-food" data-value="' + f.id + '">Save</button>' +
             '<button type="button" class="btn-secondary" data-action="cancel-edit-food">Cancel</button></div></div></li>';
         }
-        return '<li><span>' + esc(f.name) + ' — ' + f.calsPerCup + ' cal/cup</span>' +
+        return '<li style="align-items:flex-start;"><div>' + esc(f.name) + ' — ' + f.calsPerCup + ' cal/cup' + foodNutrientSubtext(f) + '</div>' +
           '<span style="display:flex;align-items:center;gap:10px;">' +
           '<button type="button" class="delete-btn" data-action="edit-food" data-value="' + f.id + '">' + ICONS.edit + '</button>' +
           '<button type="button" class="delete-btn" data-action="delete-food" data-value="' + f.id + '">' + ICONS.x + '</button></span></li>';
@@ -516,11 +629,21 @@
       '<button type="button" class="btn-dark" style="margin-top:10px;" data-action="export-excel">' + ICONS.download + ' Export to Excel</button>' +
       '</section>';
 
-    html += '<section class="card"><div class="table-wrap"><table class="report-table"><thead><tr><th>Date</th><th>Cal</th><th>BMs</th><th>Abnormal</th></tr></thead><tbody>';
+    html += '<section class="card"><div class="table-wrap"><table class="report-table"><thead><tr><th>Date</th><th>Cal</th><th>Protein</th><th>Fat</th><th>Fiber</th><th>BMs</th><th>Abnormal</th></tr></thead><tbody>';
     state.reportRows.forEach(function (r) {
       var cal = r.foodLogs.reduce(function (s, f) { return s + f.calories; }, 0);
+      var protein = null, fat = null, fiber = null;
+      r.foodLogs.forEach(function (f) {
+        if (f.proteinG != null) protein = (protein || 0) + f.proteinG;
+        if (f.fatG != null) fat = (fat || 0) + f.fatG;
+        if (f.fiberG != null) fiber = (fiber || 0) + f.fiberG;
+      });
       var abnormal = r.poopLogs.filter(function (p) { return p.colorAbnormal; }).length;
-      html += '<tr><td>' + r.date + '</td><td>' + (cal ? cal.toFixed(2) : '—') + '</td><td>' + (r.poopLogs.length || '—') + '</td>' +
+      html += '<tr><td>' + r.date + '</td><td>' + (cal ? cal.toFixed(2) : '—') + '</td>' +
+        '<td>' + (protein != null ? round2(protein) + 'g' : '—') + '</td>' +
+        '<td>' + (fat != null ? round2(fat) + 'g' : '—') + '</td>' +
+        '<td>' + (fiber != null ? round2(fiber) + 'g' : '—') + '</td>' +
+        '<td>' + (r.poopLogs.length || '—') + '</td>' +
         '<td class="' + (abnormal > 0 ? 'abnormal' : '') + '">' + (abnormal > 0 ? abnormal : '—') + '</td></tr>';
     });
     html += '</tbody></table></div></section>';
@@ -563,6 +686,7 @@
         case 'set-edit-poop-texture': setState({ editPoopTexture: value }); break;
         case 'set-edit-poop-color': setState({ editPoopAbnormal: value === 'Abnormal' }); break;
         case 'add-food': addFood(); break;
+        case 'toggle-add-nutrition': setState({ showAddNutrition: !state.showAddNutrition }); break;
         case 'delete-food': deleteFood(value); break;
         case 'edit-food': startEditFood(value); break;
         case 'cancel-edit-food': cancelEditFood(); break;
@@ -600,6 +724,30 @@
       var cal = Math.round(cups * food.calsPerCup * 100) / 100;
       preview.innerHTML = cups + ' cups × ' + food.calsPerCup + ' cal/cup = <strong>' + cal + ' cal</strong>';
     };
+
+    bindGramsPreview('new-food-cals', 'new-food-kcalkg', 'new-food-gpc-preview');
+    if (state.editingFoodId) {
+      bindGramsPreview(
+        'edit-food-cals-' + state.editingFoodId,
+        'edit-food-kcalkg-' + state.editingFoodId,
+        'edit-food-gpc-preview-' + state.editingFoodId
+      );
+    }
+  }
+
+  function bindGramsPreview(calsId, kcalId, previewId) {
+    var calsEl = document.getElementById(calsId);
+    var kcalEl = document.getElementById(kcalId);
+    var previewEl = document.getElementById(previewId);
+    if (!calsEl || !kcalEl || !previewEl) return;
+    var update = function () {
+      var cals = parseFloat(calsEl.value);
+      var kcal = parseFloat(kcalEl.value);
+      var gpc = gramsPerCup(cals, kcal);
+      previewEl.textContent = gpc ? '≈' + gpc + 'g per cup' : 'Add this and calories/cup to see grams per cup';
+    };
+    calsEl.oninput = update;
+    kcalEl.oninput = update;
   }
 
   // exposed so sync.js can ask for a re-render after pulling/merging remote data

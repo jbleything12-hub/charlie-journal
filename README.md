@@ -70,6 +70,31 @@ back down.
 The **Export to Excel** button on the Reports tab is for sharing readable
 data with your vet — a snapshot, not a way to restore the app itself.
 
+## Nutrient tracking (optional, per food)
+
+You can now log a food's calories-per-kg, protein %, fat %, and fiber % (all
+from the "Calorie Content" and "Guaranteed Analysis" sections of the bag) via
+"+ Add nutrition info" on the Foods tab. None of it is required — a food
+without this info still works exactly as it always has.
+
+When it's filled in, the app estimates grams of protein/fat/fiber per log
+entry, totals them on the Journal tab and in Reports, and includes them in
+the Excel export. These are estimates from guaranteed-analysis minimums/
+maximums, not lab measurements — the app labels them "est." everywhere they
+appear for that reason.
+
+**One-time setup in Supabase:** open the SQL Editor and run this once, so the
+`foods` table has room for the new fields:
+
+```sql
+alter table foods
+  add column if not exists kcal_per_kg numeric,
+  add column if not exists protein_pct numeric,
+  add column if not exists fat_pct numeric,
+  add column if not exists fiber_pct numeric,
+  add column if not exists grams_per_cup numeric;
+```
+
 ## Editing entries
 
 Every food log, bathroom log, and food in your back-end list has a pencil
