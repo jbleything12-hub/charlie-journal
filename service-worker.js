@@ -1,4 +1,4 @@
-var CACHE_NAME = 'charlie-journal-v3';
+var CACHE_NAME = 'charlie-journal-v5';
 var SHELL_FILES = [
   './',
   './index.html',
@@ -34,18 +34,20 @@ self.addEventListener('activate', function (event) {
 
 self.addEventListener('fetch', function (event) {
   if (event.request.method !== 'GET') return;
+  var isSameOrigin = event.request.url.indexOf(self.location.origin) === 0;
+  if (!isSameOrigin) return; // let CDN requests (fonts, Supabase, XLSX) hit the network normally
+
+  // network-first for our own files, so a fresh deploy is seen immediately
+  // when there's a connection; cache is only a fallback for offline use.
   event.respondWith(
-    caches.match(event.request).then(function (cached) {
-      var networkFetch = fetch(event.request)
-        .then(function (response) {
-          if (response && response.status === 200 && event.request.url.indexOf(self.location.origin) === 0) {
-            var copy = response.clone();
-            caches.open(CACHE_NAME).then(function (cache) { cache.put(event.request, copy); });
-          }
-          return response;
-        })
-        .catch(function () { return cached; });
-      return cached || networkFetch;
-    })
+    fetch(event.request)
+      .then(function (response) {
+        if (response && response.status === 200) {
+          var copy = response.clone();
+          caches.open(CACHE_NAME).then(function (cache) { cache.put(event.request, copy); });
+        }
+        return response;
+      })
+      .catch(function () { return caches.match(event.request); })
   );
 });

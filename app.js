@@ -40,14 +40,6 @@
     if (window.CharlieSync && window.CharlieSync.pushEntry) window.CharlieSync.pushEntry(key, val);
     return val;
   }
-  function allEntryKeys() {
-    var out = [];
-    for (var i = 0; i < localStorage.length; i++) {
-      var k = localStorage.key(i);
-      if (k && k.indexOf('charlie:entry:') === 0) out.push(k.replace('charlie:entry:', ''));
-    }
-    return out.sort();
-  }
 
   // ---- state ----
   var state = {
@@ -56,10 +48,16 @@
     foods: getFoods(),
     entry: getEntry(toKey(new Date())),
     activeFoodId: null,
+    editingFoodLogId: null,
     showPoopForm: false,
     poopSize: 'Typical',
     poopTexture: 'Solid',
     poopAbnormal: false,
+    editingPoopLogId: null,
+    editPoopSize: 'Typical',
+    editPoopTexture: 'Solid',
+    editPoopAbnormal: false,
+    editingFoodId: null,
     error: '',
     reportGranularity: 'week',
     reportAnchor: toKey(new Date()),
@@ -128,7 +126,7 @@
   }
 
   function openPoopForm() {
-    setState({ showPoopForm: true, poopSize: 'Typical', poopTexture: 'Solid', poopAbnormal: false });
+    setState({ showPoopForm: true, poopSize: 'Typical', poopTexture: 'Solid', poopAbnormal: false, editingPoopLogId: null });
     setTimeout(function () {
       var t = document.getElementById('poop-time');
       if (t) t.value = nowTime();
@@ -217,44 +215,93 @@
     URL.revokeObjectURL(url);
   }
 
-  function exportBackup() {
-    var entries = {};
-    allEntryKeys().forEach(function (k) { entries[k] = getEntry(k); });
-    var payload = { app: 'charlie-journal', version: 1, exportedAt: new Date().toISOString(), foods: getFoods(), entries: entries };
-    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = 'charlie-journal-backup-' + toKey(new Date()) + '.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  // ---- edit: food log ----
+  function startEditFoodLog(id) {
+    setState({ editingFoodLogId: id, activeFoodId: null });
+  }
+  function cancelEditFoodLog() {
+    setState({ editingFoodLogId: null });
+  }
+  function saveEditFoodLog(id) {
+    var log = state.entry.foodLogs.find(function (l) { return l.id === id; });
+    if (!log) return;
+    var timeEl = document.getElementById('edit-food-log-time-' + id);
+    var cupsEl = document.getElementById('edit-food-log-cups-' + id);
+    var cups = parseFloat(cupsEl.value);
+    if (isNaN(cups) || cups <= 0) return;
+    var food = state.foods.find(function (f) { return f.id === log.foodId; });
+    var calories;
+    if (food) {
+      calories = Math.round(cups * food.calsPerCup * 100) / 100;
+    } else {
+      // the underlying food was deleted since this was logged — scale proportionally
+      // from what was recorded, so the entry stays sane instead of breaking.
+      var perCup = log.cups > 0 ? log.calories / log.cups : 0;
+      calories = Math.round(cups * perCup * 100) / 100;
+    }
+    var next = Object.assign({}, state.entry, {
+      foodLogs: state.entry.foodLogs.map(function (l) {
+        if (l.id !== id) return l;
+        return Object.assign({}, l, { time: (timeEl && timeEl.value) || l.time, cups: cups, calories: calories });
+      })
+    });
+    saveEntryLocal(state.dateKey, next);
+    setState({ entry: next, editingFoodLogId: null });
   }
 
-  function importBackup(file) {
-    var reader = new FileReader();
-    reader.onload = function () {
-      var data;
-      try {
-        data = JSON.parse(reader.result);
-      } catch (e) {
-        setState({ error: "Could not read that file — it doesn't look like a valid backup." });
-        return;
-      }
-      if (!data || !Array.isArray(data.foods) || typeof data.entries !== 'object' || !data.entries) {
-        setState({ error: "That file doesn't look like a Charlie's Journal backup." });
-        return;
-      }
-      var ok = window.confirm('Restoring will replace all foods and logs currently on this device with the backup. Continue?');
-      if (!ok) return;
-      setFoods(data.foods);
-      Object.keys(data.entries).forEach(function (k) { setEntry(k, data.entries[k]); });
-      setState({ foods: data.foods, entry: getEntry(state.dateKey), error: '' });
-      if (window.CharlieSync && window.CharlieSync.forcePushAll) window.CharlieSync.forcePushAll();
-    };
-    reader.onerror = function () { setState({ error: 'Could not read that file.' }); };
-    reader.readAsText(file);
+  // ---- edit: poop log ----
+  function startEditPoopLog(id) {
+    var log = state.entry.poopLogs.find(function (l) { return l.id === id; });
+    if (!log) return;
+    setState({
+      editingPoopLogId: id, showPoopForm: false,
+      editPoopSize: log.size, editPoopTexture: log.texture, editPoopAbnormal: log.colorAbnormal
+    });
+  }
+  function cancelEditPoopLog() {
+    setState({ editingPoopLogId: null });
+  }
+  function saveEditPoopLog(id) {
+    var timeEl = document.getElementById('edit-poop-time-' + id);
+    var noteEl = document.getElementById('edit-poop-note-' + id);
+    var next = Object.assign({}, state.entry, {
+      poopLogs: state.entry.poopLogs.map(function (l) {
+        if (l.id !== id) return l;
+        return Object.assign({}, l, {
+          time: (timeEl && timeEl.value) || l.time,
+          size: state.editPoopSize,
+          texture: state.editPoopTexture,
+          colorAbnormal: state.editPoopAbnormal,
+          colorNote: state.editPoopAbnormal && noteEl ? noteEl.value.trim() : ''
+        });
+      })
+    });
+    saveEntryLocal(state.dateKey, next);
+    setState({ entry: next, editingPoopLogId: null });
+  }
+
+  // ---- edit: foods ----
+  function startEditFood(id) {
+    setState({ editingFoodId: id });
+  }
+  function cancelEditFood() {
+    setState({ editingFoodId: null });
+  }
+  function saveEditFood(id) {
+    var nameEl = document.getElementById('edit-food-name-' + id);
+    var calsEl = document.getElementById('edit-food-cals-' + id);
+    var name = nameEl.value.trim();
+    var cals = parseFloat(calsEl.value);
+    if (!name || isNaN(cals) || cals <= 0) return;
+    var updated = null;
+    var list = state.foods.map(function (f) {
+      if (f.id !== id) return f;
+      updated = Object.assign({}, f, { name: name, calsPerCup: cals, updatedAt: Date.now() });
+      return updated;
+    });
+    setFoods(list);
+    setState({ foods: list, editingFoodId: null });
+    if (updated && window.CharlieSync && window.CharlieSync.pushFood) window.CharlieSync.pushFood(updated);
   }
 
   // ---- icons (inline SVG, stroke uses currentColor) ----
@@ -268,7 +315,7 @@
     x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
     alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 17h.01"/></svg>',
-    upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9m0 0l-4 4m4-4l4 4"/><path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/></svg>'
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
   };
 
   function segmented(options, value, onclickAttr) {
@@ -349,8 +396,17 @@
       html += '<li class="log-empty">No food logged today.</li>';
     } else {
       html += state.entry.foodLogs.map(function (f) {
+        if (f.id === state.editingFoodLogId) {
+          return '<li class="log-edit-row"><div class="inline-form">' +
+            '<div class="field"><label>Time</label><input type="time" id="edit-food-log-time-' + f.id + '" value="' + f.time + '" /></div>' +
+            '<div class="field"><label>Cups of ' + esc(f.foodName) + '</label>' +
+            '<input type="number" step="0.25" min="0" id="edit-food-log-cups-' + f.id + '" value="' + f.cups + '" /></div>' +
+            '<div class="btn-row"><button type="button" class="btn-primary" data-action="save-edit-food-log" data-value="' + f.id + '">Save</button>' +
+            '<button type="button" class="btn-secondary" data-action="cancel-edit-food-log">Cancel</button></div></div></li>';
+        }
         return '<li><span>' + f.time + ' — ' + esc(f.foodName) + ', ' + f.cups + ' cups</span>' +
           '<span style="display:flex;align-items:center;gap:10px;"><span style="color:var(--ink-soft);">' + f.calories + ' cal</span>' +
+          '<button type="button" class="delete-btn" data-action="edit-food-log" data-value="' + f.id + '">' + ICONS.edit + '</button>' +
           '<button type="button" class="delete-btn" data-action="delete-food-log" data-value="' + f.id + '">' + ICONS.x + '</button></span></li>';
       }).join('');
     }
@@ -381,9 +437,21 @@
       html += '<li class="log-empty">No bathroom entries today.</li>';
     } else {
       html += state.entry.poopLogs.map(function (p) {
+        if (p.id === state.editingPoopLogId) {
+          return '<li class="log-edit-row"><div class="inline-form">' +
+            '<div class="field"><label>Time</label><input type="time" id="edit-poop-time-' + p.id + '" value="' + p.time + '" /></div>' +
+            '<div class="field"><label>Size</label>' + segmented(SIZES, state.editPoopSize, 'set-edit-poop-size') + '</div>' +
+            '<div class="field"><label>Texture</label>' + segmented(TEXTURES, state.editPoopTexture, 'set-edit-poop-texture') + '</div>' +
+            '<div class="field"><label>Color</label>' + segmented(['Normal', 'Abnormal'], state.editPoopAbnormal ? 'Abnormal' : 'Normal', 'set-edit-poop-color') + '</div>' +
+            (state.editPoopAbnormal ? '<div class="field"><label>What looked off</label><input type="text" id="edit-poop-note-' + p.id + '" value="' + esc(p.colorNote) + '" /></div>' : '') +
+            '<div class="btn-row"><button type="button" class="btn-primary" data-action="save-edit-poop-log" data-value="' + p.id + '">Save</button>' +
+            '<button type="button" class="btn-secondary" data-action="cancel-edit-poop-log">Cancel</button></div></div></li>';
+        }
         var badge = p.colorAbnormal ? '<span class="badge-abnormal">' + ICONS.alert + 'Abnormal color' + (p.colorNote ? ': ' + esc(p.colorNote) : '') + '</span>' : '';
         return '<li><span>' + p.time + ' — ' + p.size + ', ' + p.texture + badge + '</span>' +
-          '<button type="button" class="delete-btn" data-action="delete-poop-log" data-value="' + p.id + '">' + ICONS.x + '</button></li>';
+          '<span style="display:flex;align-items:center;gap:10px;">' +
+          '<button type="button" class="delete-btn" data-action="edit-poop-log" data-value="' + p.id + '">' + ICONS.edit + '</button>' +
+          '<button type="button" class="delete-btn" data-action="delete-poop-log" data-value="' + p.id + '">' + ICONS.x + '</button></span></li>';
       }).join('');
     }
     html += '</ul></section>';
@@ -403,17 +471,20 @@
       html += '<li class="log-empty">No foods yet.</li>';
     } else {
       html += state.foods.map(function (f) {
+        if (f.id === state.editingFoodId) {
+          return '<li class="log-edit-row"><div class="inline-form">' +
+            '<div class="field"><label>Food name</label><input type="text" id="edit-food-name-' + f.id + '" value="' + esc(f.name) + '" /></div>' +
+            '<div class="field"><label>Calories per cup</label><input type="number" step="0.01" min="0" id="edit-food-cals-' + f.id + '" value="' + f.calsPerCup + '" /></div>' +
+            '<div class="btn-row"><button type="button" class="btn-primary" data-action="save-edit-food" data-value="' + f.id + '">Save</button>' +
+            '<button type="button" class="btn-secondary" data-action="cancel-edit-food">Cancel</button></div></div></li>';
+        }
         return '<li><span>' + esc(f.name) + ' — ' + f.calsPerCup + ' cal/cup</span>' +
-          '<button type="button" class="delete-btn" data-action="delete-food" data-value="' + f.id + '">' + ICONS.x + '</button></li>';
+          '<span style="display:flex;align-items:center;gap:10px;">' +
+          '<button type="button" class="delete-btn" data-action="edit-food" data-value="' + f.id + '">' + ICONS.edit + '</button>' +
+          '<button type="button" class="delete-btn" data-action="delete-food" data-value="' + f.id + '">' + ICONS.x + '</button></span></li>';
       }).join('');
     }
     html += '</ul></section>';
-
-    html += '<section class="card"><h2 style="margin-bottom:8px;">Backup &amp; restore</h2>' +
-      '<p style="font-size:14px;color:var(--ink-soft);margin:0 0 12px;">This app\'s data only lives on this device. Download a backup now and then, and keep the file somewhere safe — it can fully restore everything if this phone ever loses it.</p>' +
-      '<button type="button" class="btn-primary" style="width:100%;" data-action="export-backup">' + ICONS.download + ' Download full backup</button>' +
-      '<label class="btn-dark" style="margin-top:10px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;">' + ICONS.upload + ' Restore from backup' +
-      '<input type="file" id="restore-input" accept="application/json" style="display:none;" /></label></section>';
 
     html += '<section class="card"><h2 style="margin-bottom:8px;">Account</h2>' +
       '<p style="font-size:14px;color:var(--ink-soft);margin:0 0 12px;">Charlie\'s log is backed up automatically while you\'re signed in.</p>' +
@@ -459,7 +530,7 @@
           if (value === 'reports') loadReport();
           break;
         case 'shift-date': shiftDate(parseInt(value, 10)); break;
-        case 'toggle-food': setState({ activeFoodId: state.activeFoodId === value ? null : value }); break;
+        case 'toggle-food': setState({ activeFoodId: state.activeFoodId === value ? null : value, editingFoodLogId: null }); break;
         case 'cancel-food': setState({ activeFoodId: null }); break;
         case 'log-food': logFood(value); break;
         case 'open-poop-form': openPoopForm(); break;
@@ -469,27 +540,32 @@
         case 'set-poop-texture': setState({ poopTexture: value }); break;
         case 'set-poop-color': setState({ poopAbnormal: value === 'Abnormal' }); break;
         case 'delete-food-log': deleteFoodLog(value); break;
+        case 'edit-food-log': startEditFoodLog(value); break;
+        case 'cancel-edit-food-log': cancelEditFoodLog(); break;
+        case 'save-edit-food-log': saveEditFoodLog(value); break;
         case 'delete-poop-log': deletePoopLog(value); break;
+        case 'edit-poop-log': startEditPoopLog(value); break;
+        case 'cancel-edit-poop-log': cancelEditPoopLog(); break;
+        case 'save-edit-poop-log': saveEditPoopLog(value); break;
+        case 'set-edit-poop-size': setState({ editPoopSize: value }); break;
+        case 'set-edit-poop-texture': setState({ editPoopTexture: value }); break;
+        case 'set-edit-poop-color': setState({ editPoopAbnormal: value === 'Abnormal' }); break;
         case 'add-food': addFood(); break;
         case 'delete-food': deleteFood(value); break;
+        case 'edit-food': startEditFood(value); break;
+        case 'cancel-edit-food': cancelEditFood(); break;
+        case 'save-edit-food': saveEditFood(value); break;
         case 'set-granularity':
           setState({ reportGranularity: value });
           loadReport();
           break;
         case 'export-excel': exportExcel(); break;
-        case 'export-backup': exportBackup(); break;
         case 'sign-out':
           if (window.CharlieSync && window.CharlieSync.signOut) {
             window.CharlieSync.signOut().then(function () { location.reload(); });
           }
           break;
       }
-    };
-
-    var restoreInput = document.getElementById('restore-input');
-    if (restoreInput) restoreInput.onchange = function () {
-      if (this.files && this.files[0]) importBackup(this.files[0]);
-      this.value = '';
     };
 
     var datePicker = document.getElementById('date-picker');

@@ -186,21 +186,14 @@
     run.then(flushDirty).catch(function () {});
   }
 
-  // ---- sign-in overlay (shown once; session then persists) ----
+  // ---- sign-in overlay (exists in the page from the start, just hidden — this
+  // is deliberate: iOS is unreliable about popping the keyboard for inputs that
+  // are created and inserted purely via JavaScript, especially in an installed
+  // home-screen app) ----
   function showSignIn(onSuccess) {
-    var overlay = document.createElement('div');
-    overlay.id = 'signin-overlay';
-    overlay.innerHTML =
-      '<div class="signin-card">' +
-      '<img class="signin-mark" src="icons/icon-192.png" alt="" />' +
-      '<h2>Sign in to Charlie&rsquo;s Journal</h2>' +
-      '<p>Sign in once so the log backs up automatically from here on.</p>' +
-      '<div class="field"><label>Email</label><input type="email" id="signin-email" autocomplete="username" /></div>' +
-      '<div class="field"><label>Password</label><input type="password" id="signin-password" autocomplete="current-password" /></div>' +
-      '<div id="signin-error" class="signin-error"></div>' +
-      '<button type="button" class="btn-primary" style="width:100%;" id="signin-submit">Sign in</button>' +
-      '</div>';
-    document.body.appendChild(overlay);
+    var overlay = document.getElementById('signin-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
 
     var submit = document.getElementById('signin-submit');
     var doSubmit = function () {
@@ -213,14 +206,14 @@
       sb.auth.signInWithPassword({ email: email, password: password }).then(function (res) {
         submit.textContent = 'Sign in';
         if (res.error) { errEl.textContent = res.error.message; return; }
-        document.body.removeChild(overlay);
+        overlay.classList.add('hidden');
         onSuccess();
       });
     };
     submit.onclick = doSubmit;
-    overlay.addEventListener('keydown', function (e) {
+    overlay.onkeydown = function (e) {
       if (e.key === 'Enter') doSubmit();
-    });
+    };
   }
 
   window.CharlieSync = {

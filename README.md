@@ -61,26 +61,21 @@ no browser bar, and it works offline after the first load.
 
 ## Don't lose your data
 
-With cloud sync on, Supabase is now your real safety net — clearing this
-phone's browser data or losing the phone no longer means losing the log,
-since everything's already backed up there. Sign in with the same email and
+With cloud sync on, Supabase is your real safety net — clearing this phone's
+browser data or losing the phone no longer means losing the log, since
+everything's already backed up there. Sign in with the same email and
 password on a new device (or after reinstalling) and it pulls everything
 back down.
 
-The **Backup & restore** section on the Foods tab is still there as a second,
-fully offline copy you control directly — handy for sharing a file with your
-vet or restoring instantly without waiting on a network round-trip:
+The **Export to Excel** button on the Reports tab is for sharing readable
+data with your vet — a snapshot, not a way to restore the app itself.
 
-- **Download full backup** — saves every food and every day's log as one file.
-  Do this every so often (e.g. after a vet visit, or weekly while you're
-  actively tracking).
-- **Restore from backup** — pick that file to fully restore everything, on
-  this phone or a new one.
-- Save the backup file somewhere that isn't just this phone — email it to
-  yourself, or save it to cloud storage (iCloud, Google Drive, etc.).
+## Editing entries
 
-The **Export to Excel** button on the Reports tab is separate — that's for
-sharing readable data with your vet, not for restoring the app itself.
+Every food log, bathroom log, and food in your back-end list has a pencil
+icon next to it — tap it to edit that entry in place, or the X to delete it.
+Edits update the same record everywhere (including in Supabase), rather than
+creating a duplicate.
 
 ## Notes
 
