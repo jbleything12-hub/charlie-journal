@@ -138,6 +138,7 @@ main {
   font-size: 20px;
   transition: background-color 0.15s ease, transform 0.1s ease;
 }
+.date-nav button.arrow svg { width: 20px; height: 20px; }
 .date-nav button.arrow:active { background: var(--sky-100); transform: scale(0.94); }
 
 .date-nav .date-info {
@@ -189,6 +190,7 @@ main {
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
 .pill:active { transform: scale(0.96); }
+.pill svg { width: 15px; height: 15px; flex-shrink: 0; }
 
 .pill.selected {
   background: var(--sky-600);
@@ -297,6 +299,7 @@ main {
   font-weight: 700;
   transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
 }
+.btn-primary svg, .btn-secondary svg, .btn-dark svg { width: 18px; height: 18px; flex-shrink: 0; }
 .btn-primary:active, .btn-secondary:active, .btn-dark:active { transform: scale(0.98); }
 
 .btn-primary {
@@ -358,9 +361,11 @@ main {
   font-weight: 700;
   margin-left: 8px;
 }
+.badge-abnormal svg { width: 12px; height: 12px; flex-shrink: 0; }
 
-.delete-btn { color: var(--ink-faint); flex-shrink: 0; }
+.delete-btn { color: var(--ink-faint); flex-shrink: 0; display: inline-flex; align-items: center; }
 .delete-btn:active { color: var(--amber); }
+.delete-btn svg { width: 18px; height: 18px; display: block; }
 
 .hint-box {
   font-size: 14px;
@@ -387,6 +392,7 @@ main {
   font-size: 14px;
   margin: 0 18px;
 }
+.error-banner svg { width: 18px; height: 18px; flex-shrink: 0; }
 
 /* Report table */
 table.report-table {

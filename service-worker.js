@@ -1,4 +1,4 @@
-var CACHE_NAME = 'charlie-journal-v5';
+var CACHE_NAME = 'charlie-journal-v6';
 var SHELL_FILES = [
   './',
   './index.html',
