@@ -144,6 +144,62 @@ icon next to it — tap it to edit that entry in place, or the X to delete it.
 Edits update the same record everywhere (including in Supabase), rather than
 creating a duplicate.
 
+## Daily calorie goal (optional)
+
+The Foods tab now has a "Charlie's profile" card at the top. Enter a daily
+calorie goal there and the Journal tab's Food card will show the goal,
+calories consumed so far, and calories remaining (or how far over) for the
+selected day. Leave it blank and the app works exactly as before.
+
+## Weight history
+
+Also in "Charlie's profile": log a weigh-in with a date and weight (lb).
+Every weigh-in is kept — nothing is overwritten — and the most recent one
+(by date) is used anywhere the app shows "current weight." Edit or delete
+past entries with the pencil/X icons, same as everywhere else.
+
+## Supplements & treats (not just liquids anymore)
+
+The old "Supplements" section is now "Supplements & treats." Each item has:
+
+- **Category** — Supplement or Treat
+- **Form** — Liquid, Pump, Powder, Capsule, Tablet, Chew, Treat, or Other
+- **Unit label** — free text (e.g. "pumps", "tablets", "g", "chews"),
+  pre-filled from the form but editable
+- **Calories per unit** (optional)
+
+Existing liquid/pump supplements aren't affected — they're read as
+Category: Supplement, Form: Pump, Unit: pumps automatically. When building a
+bowl, supplements and treats show as separate chip rows, and the amount
+prompt asks for whatever unit that item uses (e.g. "Tablets of Glucosamine").
+
+**One-time setup in Supabase:** run `supabase-migration.sql` (included in
+this folder) once in the SQL Editor. It adds the new `category`, `form`,
+`unit_label`, and `cals_per_unit` columns to `supplements`, plus a new
+`profile` table for the calorie goal and weight history above — safe to
+re-run, and it doesn't touch any existing rows beyond backfilling the new
+columns.
+
+## Bathroom: potty outings, not just bowel movements
+
+"Add" on the Bathroom card is now "Add outing." Every outing records a time
+and a Yes/No for whether a bowel movement happened; only when the answer is
+Yes do the existing size/texture/color fields appear. The Journal tab shows
+a running "X outings • Y BMs today" line, and a Normal color is now always
+shown explicitly next to a BM entry (previously a normal color reading
+showed nothing at all, which could look like it hadn't been recorded).
+
+## Combined Excel report
+
+The Reports tab's "Export to Excel" now produces a single sheet — Animal,
+Date, Time, Event Type (Food / Supplement / Treat / Off-Plan / Potty Outing /
+Weigh-In), Item, Category, Form, Quantity, Unit, Calories, estimated
+protein/fat/fiber, and BM occurred/size/texture/color/note — sorted
+chronologically per day. That makes it possible to filter or sort by any of
+those columns and line up what Charlie ate against his bathroom activity,
+instead of hunting across three separate sheets. Any weigh-ins that fall
+inside the selected date range are included as rows too.
+
 ## Notes
 
 - To make design or feature changes later, edit `app.js` (logic) and `style.css`

@@ -36,10 +36,51 @@
     }
     return out;
   }
+  function getLocalProfile() {
+    try {
+      var raw = JSON.parse(localStorage.getItem('charlie:profile') || 'null');
+      if (!raw) return { dailyCalorieGoal: null, weightHistory: [], updatedAt: 0 };
+      return {
+        dailyCalorieGoal: raw.dailyCalorieGoal != null ? raw.dailyCalorieGoal : null,
+        weightHistory: Array.isArray(raw.weightHistory) ? raw.weightHistory : [],
+        updatedAt: raw.updatedAt || 0
+      };
+    } catch (e) { return { dailyCalorieGoal: null, weightHistory: [], updatedAt: 0 }; }
+  }
+  function setLocalProfile(p) { localStorage.setItem('charlie:profile', JSON.stringify(p)); }
+
+  // A logged supplement/treat item from before this update only has `pumps`.
+  // Mirrors app.js's migrateMealItem so pulled/merged remote data matches
+  // whatever shape a local read would already have produced.
+  function migrateMealItem(it) {
+    if (it.type !== 'supplement') return it;
+    if (it.quantity != null) return it;
+    return Object.assign({}, it, {
+      quantity: it.pumps != null ? it.pumps : it.quantity,
+      unitLabel: it.unitLabel || 'pumps',
+      category: it.category || 'supplement',
+      form: it.form || 'pump'
+    });
+  }
+  function migratePoopLog(p) {
+    if (p.hadBM != null) return p;
+    return Object.assign({}, p, { hadBM: true });
+  }
+  function migrateSupplement(s) {
+    if (s.category && s.form && s.unitLabel) return s;
+    var calsPerUnit = s.calsPerUnit != null ? s.calsPerUnit : (s.calsPerPump != null ? s.calsPerPump : null);
+    return Object.assign({}, s, {
+      category: s.category || 'supplement',
+      form: s.form || 'pump',
+      unitLabel: s.unitLabel || 'pumps',
+      calsPerUnit: calsPerUnit
+    });
+  }
 
   // Same conversion app.js does on read: an older flat foodLogs array becomes
-  // a meals array (grouped by time), and any type:'other' item embedded in a
-  // meal (from a brief earlier version) is split out into its own incident.
+  // a meals array (grouped by time), any type:'other' item embedded in a
+  // meal (from a brief earlier version) is split out into its own incident,
+  // and meal items / bathroom entries are brought up to the current shape.
   function toMealsShape(raw) {
     if (!raw) return { meals: [], incidents: [], poopLogs: [], updatedAt: 0 };
     if (Array.isArray(raw.meals)) {
@@ -50,15 +91,15 @@
           if (it.type === 'other') {
             incidents.push({ id: it.id || uid(), time: m.time, description: it.description, updatedAt: m.updatedAt || raw.updatedAt || Date.now() });
           } else {
-            keepItems.push(it);
+            keepItems.push(migrateMealItem(it));
           }
         });
         return Object.assign({}, m, { items: keepItems });
       }).filter(function (m) { return m.items.length > 0; });
-      return { meals: meals, incidents: incidents, poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+      return { meals: meals, incidents: incidents, poopLogs: (raw.poopLogs || []).map(migratePoopLog), updatedAt: raw.updatedAt || 0 };
     }
     if (!Array.isArray(raw.foodLogs)) {
-      return { meals: [], incidents: raw.incidents || [], poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+      return { meals: [], incidents: raw.incidents || [], poopLogs: (raw.poopLogs || []).map(migratePoopLog), updatedAt: raw.updatedAt || 0 };
     }
     var groups = {};
     var order = [];
@@ -75,7 +116,7 @@
         fiberG: f.fiberG != null ? f.fiberG : null
       });
     });
-    return { meals: order.map(function (k) { return groups[k]; }), incidents: [], poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    return { meals: order.map(function (k) { return groups[k]; }), incidents: [], poopLogs: (raw.poopLogs || []).map(migratePoopLog), updatedAt: raw.updatedAt || 0 };
   }
 
   // Converts a raw food_logs array pulled from Supabase into the meals shape,
@@ -92,7 +133,7 @@
           if (it.type === 'other') {
             extraIncidents.push({ id: it.id || uid(), time: m.time, description: it.description, updatedAt: m.updatedAt || fallbackUpdatedAt || Date.now() });
           } else {
-            keepItems.push(it);
+            keepItems.push(migrateMealItem(it));
           }
         });
         return Object.assign({}, m, { items: keepItems });
@@ -160,7 +201,13 @@
     return sb.from('supplements').upsert({
       id: supp.id,
       name: supp.name,
-      cals_per_pump: supp.calsPerPump != null ? supp.calsPerPump : null,
+      category: supp.category || 'supplement',
+      form: supp.form || 'pump',
+      unit_label: supp.unitLabel || 'pumps',
+      cals_per_unit: supp.calsPerUnit != null ? supp.calsPerUnit : null,
+      // kept in sync for older app versions / direct table viewers that still
+      // read cals_per_pump; harmless once form isn't 'pump'
+      cals_per_pump: supp.form === 'pump' && supp.calsPerUnit != null ? supp.calsPerUnit : null,
       updated_at: new Date(supp.updatedAt || Date.now()).toISOString()
     }).then(function (res) { return !res.error; }).catch(function () { return false; });
   }
@@ -180,6 +227,15 @@
     }, { onConflict: 'date,user_id' }).then(function (res) { return !res.error; }).catch(function () { return false; });
   }
 
+  function upsertProfileRemote(profile) {
+    if (!sb) return Promise.resolve(false);
+    return sb.from('profile').upsert({
+      daily_calorie_goal: profile.dailyCalorieGoal != null ? profile.dailyCalorieGoal : null,
+      weight_history: profile.weightHistory || [],
+      updated_at: new Date(profile.updatedAt || Date.now()).toISOString()
+    }, { onConflict: 'user_id' }).then(function (res) { return !res.error; }).catch(function () { return false; });
+  }
+
   // ---- push with automatic retry-on-reconnect ----
   function pushFood(food) {
     upsertFoodRemote(food).then(function (ok) { markDirty('foods', food.id, !ok); });
@@ -197,6 +253,9 @@
   }
   function pushEntry(dateKey, entry) {
     upsertEntryRemote(dateKey, entry).then(function (ok) { markDirty('entries', dateKey, !ok); });
+  }
+  function pushProfile(profile) {
+    upsertProfileRemote(profile).then(function (ok) { markDirty('profile', 'charlie', !ok); });
   }
 
   function flushDirty() {
@@ -221,6 +280,10 @@
       var entry = getLocalEntry(key);
       if (entry) upsertEntryRemote(key, entry).then(function (ok) { markDirty('entries', key, !ok); });
     });
+    getDirty('profile').forEach(function () {
+      var profile = getLocalProfile();
+      upsertProfileRemote(profile).then(function (ok) { markDirty('profile', 'charlie', !ok); });
+    });
   }
 
   // ---- pull + merge (newest updatedAt wins per record) ----
@@ -240,16 +303,33 @@
     return (remote.updatedAt || 0) > (local.updatedAt || 0) ? remote : local;
   }
 
+  // Weight history entries merge by id like foods/supplements (so a weigh-in
+  // logged on one device isn't lost when pulling from another). The scalar
+  // calorie goal just takes whichever profile record was updated more
+  // recently overall.
+  function mergeProfile(local, remote) {
+    if (!remote) return local;
+    if (!local) return remote;
+    var newerScalarSource = (remote.updatedAt || 0) > (local.updatedAt || 0) ? remote : local;
+    return {
+      dailyCalorieGoal: newerScalarSource.dailyCalorieGoal,
+      weightHistory: mergeById(local.weightHistory || [], remote.weightHistory || []),
+      updatedAt: Math.max(local.updatedAt || 0, remote.updatedAt || 0)
+    };
+  }
+
   function pullAndMerge() {
     if (!sb) return Promise.resolve();
     return Promise.all([
       sb.from('foods').select('*'),
       sb.from('supplements').select('*'),
-      sb.from('entries').select('*')
+      sb.from('entries').select('*'),
+      sb.from('profile').select('*')
     ]).then(function (results) {
       var foodsRes = results[0];
       var suppsRes = results[1];
       var entriesRes = results[2];
+      var profileRes = results[3];
 
       var remoteFoods = (foodsRes.data || []).map(function (r) {
         return {
@@ -264,11 +344,15 @@
       setLocalFoods(mergeById(getLocalFoods(), remoteFoods));
 
       var remoteSupps = (suppsRes.data || []).map(function (r) {
-        return {
+        return migrateSupplement({
           id: r.id, name: r.name,
+          category: r.category || null,
+          form: r.form || null,
+          unitLabel: r.unit_label || null,
+          calsPerUnit: r.cals_per_unit != null ? Number(r.cals_per_unit) : (r.cals_per_pump != null ? Number(r.cals_per_pump) : null),
           calsPerPump: r.cals_per_pump != null ? Number(r.cals_per_pump) : null,
           updatedAt: new Date(r.updated_at).getTime()
-        };
+        });
       });
       setLocalSupplements(mergeById(getLocalSupplements(), remoteSupps));
 
@@ -280,7 +364,7 @@
         remoteEntries[r.date] = {
           meals: normalized.meals,
           incidents: incidents,
-          poopLogs: r.poop_logs || [],
+          poopLogs: (r.poop_logs || []).map(migratePoopLog),
           updatedAt: updatedAtMs
         };
       });
@@ -290,6 +374,14 @@
         var merged = mergeEntry(toMealsShape(getLocalEntry(k)), remoteEntries[k]);
         if (merged) setLocalEntry(k, merged);
       });
+
+      var profileRow = (profileRes.data || [])[0];
+      var remoteProfile = profileRow ? {
+        dailyCalorieGoal: profileRow.daily_calorie_goal != null ? Number(profileRow.daily_calorie_goal) : null,
+        weightHistory: Array.isArray(profileRow.weight_history) ? profileRow.weight_history : [],
+        updatedAt: new Date(profileRow.updated_at).getTime()
+      } : null;
+      setLocalProfile(mergeProfile(getLocalProfile(), remoteProfile));
 
       refreshApp();
     });
@@ -305,7 +397,7 @@
     });
     setLocalFoods(foods);
 
-    var supps = getLocalSupplements();
+    var supps = getLocalSupplements().map(migrateSupplement);
     supps.forEach(function (s) {
       if (!s.updatedAt) s.updatedAt = Date.now();
       jobs.push(upsertSupplementRemote(s));
@@ -320,6 +412,12 @@
         jobs.push(upsertEntryRemote(k, e));
       }
     });
+
+    var profile = getLocalProfile();
+    if (!profile.updatedAt) profile.updatedAt = Date.now();
+    setLocalProfile(profile);
+    jobs.push(upsertProfileRemote(profile));
+
     return Promise.all(jobs);
   }
 
@@ -371,6 +469,7 @@
     pushSupplement: pushSupplement,
     deleteSupplementRemote: pushDeleteSupplement,
     pushEntry: pushEntry,
+    pushProfile: pushProfile,
     forcePushAll: forcePushAll,
     signOut: function () {
       if (!sb) return Promise.resolve();
