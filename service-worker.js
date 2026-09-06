@@ -1,4 +1,4 @@
-var CACHE_NAME = 'charlie-journal-v9';
+var CACHE_NAME = 'charlie-journal-v10';
 var SHELL_FILES = [
   './',
   './index.html',
@@ -9,7 +9,9 @@ var SHELL_FILES = [
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
-  './icons/icon-180.png'
+  './icons/icon-180.png',
+  './icons/bowl-40.png',
+  './icons/poop-40.png'
 ];
 
 self.addEventListener('install', function (event) {

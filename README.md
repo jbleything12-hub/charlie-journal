@@ -70,20 +70,28 @@ back down.
 The **Export to Excel** button on the Reports tab is for sharing readable
 data with your vet — a snapshot, not a way to restore the app itself.
 
+## Off-plan eating, tracked separately from meals
+
+"Ate something he shouldn't" is deliberately kept separate from Build Bowl —
+it's just a time and a short description, no calories or nutrients attempted,
+and it shows up in its own "Off-Plan" sheet in the Excel export.
+
+This needs one more small column added in Supabase — run this once:
+
+```sql
+alter table entries add column if not exists incidents jsonb default '[]';
+```
+
 ## Building an entry (as of this update)
 
-Food is now logged as one time-stamped entry that can hold several things at
-once — tap "Salmon LID," add 1 cup, tap "Fish Oil," add 3 pumps, and it all
-saves together as a single 10:45am entry instead of two separate rows.
+Tap **Build Bowl** to log food — add "Salmon LID" (1 cup), add "Fish Oil"
+(3 pumps), then Save, and it all lands as one time-stamped entry instead of
+several separate rows.
 
-- **Foods and Supplements** each get their own chip row on the Journal tab.
+- **Foods and Supplements** each get their own chip row inside the builder.
   Supplements are managed on the Foods tab, same pattern as foods — name plus
   an optional calories-per-pump (handy for something like a fish oil pump
   bottle that lists kcal per pump on the label).
-- **"Something he shouldn't have eaten"** logs an off-plan item with just a
-  time and a free-text description — no calorie or nutrient math, since
-  there's nothing to calculate for a sock or a piece of trash. It can be
-  added on its own or alongside a normal meal in the same entry.
 - Editing a saved entry reopens the same builder, pre-filled, so you can add,
   remove, or adjust before saving again.
 - Old entries logged before this update still display correctly — they're

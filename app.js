@@ -37,15 +37,33 @@
     };
   };
 
-  var emptyEntry = function () { return { meals: [], poopLogs: [], updatedAt: 0 }; };
+  var emptyEntry = function () { return { meals: [], incidents: [], poopLogs: [], updatedAt: 0 }; };
 
-  // Converts an older single-item-per-time-slot day (foodLogs: [...]) into the
-  // current shape (meals: [{ time, items: [...] }]) by grouping same-time
-  // entries into one meal. Every field on each item is preserved as-is.
+  // Converts older shapes into the current one:
+  //  - oldest: foodLogs was a flat array of single-item logs
+  //  - previous update: meals existed, but an "ate something he shouldn't"
+  //    entry was stored as a type:'other' item inside a meal
+  //  - current: meals hold only food/supplement items; incidents are separate
   function migrateEntryShape(raw) {
     if (!raw) return emptyEntry();
-    if (Array.isArray(raw.meals)) return raw;
-    if (!Array.isArray(raw.foodLogs)) return { meals: [], poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    if (Array.isArray(raw.meals)) {
+      var incidents = Array.isArray(raw.incidents) ? raw.incidents.slice() : [];
+      var meals = raw.meals.map(function (m) {
+        var keepItems = [];
+        (m.items || []).forEach(function (it) {
+          if (it.type === 'other') {
+            incidents.push({ id: it.id || uid(), time: m.time, description: it.description, updatedAt: m.updatedAt || raw.updatedAt || Date.now() });
+          } else {
+            keepItems.push(it);
+          }
+        });
+        return Object.assign({}, m, { items: keepItems });
+      }).filter(function (m) { return m.items.length > 0; });
+      return { meals: meals, incidents: incidents, poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    }
+    if (!Array.isArray(raw.foodLogs)) {
+      return { meals: [], incidents: raw.incidents || [], poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    }
     var groups = {};
     var order = [];
     raw.foodLogs.forEach(function (f) {
@@ -61,7 +79,7 @@
         fiberG: f.fiberG != null ? f.fiberG : null
       });
     });
-    return { meals: order.map(function (k) { return groups[k]; }), poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    return { meals: order.map(function (k) { return groups[k]; }), incidents: [], poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
   }
 
   // ---- storage ----
@@ -98,7 +116,9 @@
     draftMeal: null,          // { time, items: [] } while building/editing a bowl
     editingMealId: null,
     pendingChip: null,        // { type: 'food'|'supplement', id }
-    showOtherForm: false,
+
+    showIncidentForm: false,
+    editingIncidentId: null,
 
     showPoopForm: false,
     poopSize: 'Typical',
@@ -131,14 +151,16 @@
     var key = toKey(d);
     setState({
       dateKey: key, entry: getEntry(key),
-      draftMeal: null, editingMealId: null, pendingChip: null, showOtherForm: false,
+      draftMeal: null, editingMealId: null, pendingChip: null,
+      showIncidentForm: false, editingIncidentId: null,
       showPoopForm: false, editingPoopLogId: null
     });
   }
   function setDate(key) {
     setState({
       dateKey: key, entry: getEntry(key),
-      draftMeal: null, editingMealId: null, pendingChip: null, showOtherForm: false,
+      draftMeal: null, editingMealId: null, pendingChip: null,
+      showIncidentForm: false, editingIncidentId: null,
       showPoopForm: false, editingPoopLogId: null
     });
   }
@@ -270,9 +292,13 @@
   }
 
   // ---- building / editing a "bowl" (one time-stamped entry with several items) ----
+  function startBowl() {
+    if (!state.draftMeal) setState({ draftMeal: { time: nowTime(), items: [] } });
+  }
+
   function openChipPicker(type, id) {
     var draft = state.draftMeal || { time: nowTime(), items: [] };
-    setState({ draftMeal: draft, pendingChip: { type: type, id: id }, showOtherForm: false });
+    setState({ draftMeal: draft, pendingChip: { type: type, id: id } });
   }
   function cancelPendingItem() { setState({ pendingChip: null }); }
 
@@ -308,22 +334,6 @@
     setState({ draftMeal: draft });
   }
 
-  function toggleOtherForm() {
-    var opening = !state.showOtherForm;
-    var draft = opening ? (state.draftMeal || { time: nowTime(), items: [] }) : state.draftMeal;
-    setState({ showOtherForm: opening, draftMeal: draft, pendingChip: null });
-  }
-
-  function addOtherItem() {
-    var descEl = document.getElementById('draft-other-desc');
-    var desc = descEl.value.trim();
-    if (!desc) return;
-    var draft = Object.assign({}, state.draftMeal, {
-      items: state.draftMeal.items.concat([{ id: uid(), type: 'other', description: desc }])
-    });
-    setState({ draftMeal: draft, showOtherForm: false });
-  }
-
   function saveMeal() {
     if (!state.draftMeal || state.draftMeal.items.length === 0) return;
     if (state.editingMealId) {
@@ -337,11 +347,11 @@
       : state.entry.meals.concat([mealObj]);
     var next = Object.assign({}, state.entry, { meals: meals });
     saveEntryLocal(state.dateKey, next);
-    setState({ entry: next, draftMeal: null, editingMealId: null, pendingChip: null, showOtherForm: false });
+    setState({ entry: next, draftMeal: null, editingMealId: null, pendingChip: null });
   }
 
   function cancelMeal() {
-    setState({ draftMeal: null, editingMealId: null, pendingChip: null, showOtherForm: false });
+    setState({ draftMeal: null, editingMealId: null, pendingChip: null });
   }
 
   function startEditMeal(id) {
@@ -350,7 +360,7 @@
     setState({
       editingMealId: id,
       draftMeal: { time: meal.time, items: meal.items.map(function (it) { return Object.assign({}, it); }) },
-      pendingChip: null, showOtherForm: false
+      pendingChip: null
     });
   }
 
@@ -358,6 +368,48 @@
     if (!window.confirm('Delete this entry? This can\'t be undone.')) return;
     var meals = state.entry.meals.filter(function (m) { return m.id !== id; });
     var next = Object.assign({}, state.entry, { meals: meals });
+    saveEntryLocal(state.dateKey, next);
+    setState({ entry: next });
+  }
+
+  // ---- "ate something he shouldn't" — separate from bowl-building on purpose ----
+  function openIncidentForm() { setState({ showIncidentForm: true, editingIncidentId: null }); }
+  function startEditIncident(id) { setState({ showIncidentForm: true, editingIncidentId: id }); }
+  function cancelIncidentForm() { setState({ showIncidentForm: false, editingIncidentId: null }); }
+
+  function saveIncident() {
+    var timeEl = document.getElementById('incident-time');
+    var descEl = document.getElementById('incident-desc');
+    var desc = descEl.value.trim();
+    if (!desc) return;
+    var item = { id: uid(), time: (timeEl && timeEl.value) || nowTime(), description: desc, updatedAt: Date.now() };
+    var next = Object.assign({}, state.entry, { incidents: state.entry.incidents.concat([item]) });
+    saveEntryLocal(state.dateKey, next);
+    setState({ entry: next, showIncidentForm: false });
+  }
+
+  function saveEditIncident() {
+    if (!window.confirm('Save changes to this entry?')) return;
+    var timeEl = document.getElementById('incident-time');
+    var descEl = document.getElementById('incident-desc');
+    var desc = descEl.value.trim();
+    if (!desc) return;
+    var editingId = state.editingIncidentId;
+    var next = Object.assign({}, state.entry, {
+      incidents: state.entry.incidents.map(function (i) {
+        if (i.id !== editingId) return i;
+        return Object.assign({}, i, { time: (timeEl && timeEl.value) || i.time, description: desc, updatedAt: Date.now() });
+      })
+    });
+    saveEntryLocal(state.dateKey, next);
+    setState({ entry: next, showIncidentForm: false, editingIncidentId: null });
+  }
+
+  function deleteIncident(id) {
+    if (!window.confirm('Delete this entry? This can\'t be undone.')) return;
+    var next = Object.assign({}, state.entry, {
+      incidents: state.entry.incidents.filter(function (i) { return i.id !== id; })
+    });
     saveEntryLocal(state.dateKey, next);
     setState({ entry: next });
   }
@@ -476,15 +528,16 @@
 
   function exportExcel() {
     var foodRows = [];
+    var incidentRows = [];
     var poopRows = [];
     state.reportRows.forEach(function (r) {
       r.meals.forEach(function (m) {
         m.items.forEach(function (it) {
-          var amount = it.type === 'food' ? it.cups + ' cups' : it.type === 'supplement' ? it.pumps + ' pumps' : '';
-          var name = it.type === 'food' ? it.foodName : it.type === 'supplement' ? it.supplementName : it.description;
+          var amount = it.type === 'food' ? it.cups + ' cups' : it.pumps + ' pumps';
+          var name = it.type === 'food' ? it.foodName : it.supplementName;
           foodRows.push({
             Date: r.date, Time: m.time,
-            Type: it.type === 'food' ? 'Food' : it.type === 'supplement' ? 'Supplement' : 'Other (off-plan)',
+            Type: it.type === 'food' ? 'Food' : 'Supplement',
             Item: name, Amount: amount,
             Calories: it.calories != null ? it.calories : '',
             'Protein (g, est.)': it.proteinG != null ? it.proteinG : '',
@@ -492,6 +545,9 @@
             'Fiber (g, est.)': it.fiberG != null ? it.fiberG : ''
           });
         });
+      });
+      (r.incidents || []).forEach(function (i) {
+        incidentRows.push({ Date: r.date, Time: i.time, Description: i.description });
       });
       r.poopLogs.forEach(function (p) {
         poopRows.push({
@@ -504,6 +560,9 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
       foodRows.length ? foodRows : [{ Date: '', Time: '', Type: '', Item: '', Amount: '', Calories: '', 'Protein (g, est.)': '', 'Fat (g, est.)': '', 'Fiber (g, est.)': '' }]
     ), 'Food Log');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
+      incidentRows.length ? incidentRows : [{ Date: '', Time: '', Description: '' }]
+    ), 'Off-Plan');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
       poopRows.length ? poopRows : [{ Date: '', Time: '', Size: '', Texture: '', Color: '', Notes: '' }]
     ), 'Poop Log');
@@ -625,38 +684,35 @@
   }
 
   function bowlPanelHtml() {
+    if (!state.draftMeal) return '';
     var draft = state.draftMeal;
-    var html = draft ? '<div class="bowl-panel">' : '';
-
-    if (draft) {
-      html += '<div class="field"><label>Time</label><input type="time" id="draft-time" value="' + draft.time + '" /></div>';
-      if (draft.items.length) {
-        html += '<ul class="draft-item-list">' + draft.items.map(function (it) {
-          return '<li><span class="' + (it.type === 'other' ? 'other-text' : '') + '">' + itemDescription(it) +
-            (it.calories != null ? ' — ' + it.calories + ' cal' : '') + '</span>' +
-            '<button type="button" class="delete-btn" data-action="remove-draft-item" data-value="' + it.id + '">' + ICONS.x + '</button></li>';
-        }).join('') + '</ul>';
-      }
+    var html = '<div class="bowl-panel">';
+    html += '<div class="field"><label>Time</label><input type="time" id="draft-time" value="' + draft.time + '" /></div>';
+    if (draft.items.length) {
+      html += '<ul class="draft-item-list">' + draft.items.map(function (it) {
+        return '<li><span>' + itemDescription(it) +
+          (it.calories != null ? ' — ' + it.calories + ' cal' : '') + '</span>' +
+          '<button type="button" class="delete-btn" data-action="remove-draft-item" data-value="' + it.id + '">' + ICONS.x + '</button></li>';
+      }).join('') + '</ul>';
     }
-
     html += chipRowsHtml();
     html += pendingAmountFormHtml();
-
-    if (state.showOtherForm) {
-      html += '<div class="inline-form">' +
-        '<div class="field"><label>What happened</label><input type="text" id="draft-other-desc" placeholder="e.g. got into the trash" /></div>' +
-        '<div class="btn-row"><button type="button" class="btn-primary" data-action="add-other-item">Add to entry</button>' +
-        '<button type="button" class="btn-secondary" data-action="toggle-other-form">Cancel</button></div></div>';
-    } else {
-      html += '<button type="button" class="pill ghost" style="margin-top:8px;" data-action="toggle-other-form">' + ICONS.plus + ' Something he shouldn\'t have eaten</button>';
-    }
-
-    if (draft) {
-      html += '<div class="btn-row" style="margin-top:10px;"><button type="button" class="btn-primary" data-action="save-meal">Save entry</button>' +
-        '<button type="button" class="btn-secondary" data-action="cancel-meal">Cancel</button></div>';
-      html += '</div>';
-    }
+    html += '<div class="btn-row" style="margin-top:10px;"><button type="button" class="btn-primary" data-action="save-meal">Save entry</button>' +
+      '<button type="button" class="btn-secondary" data-action="cancel-meal">Cancel</button></div>';
+    html += '</div>';
     return html;
+  }
+
+  function incidentFormHtml() {
+    if (!state.showIncidentForm) return '';
+    var editing = state.editingIncidentId ? state.entry.incidents.find(function (i) { return i.id === state.editingIncidentId; }) : null;
+    var timeVal = editing ? editing.time : nowTime();
+    var descVal = editing ? editing.description : '';
+    return '<div class="bowl-panel">' +
+      '<div class="field"><label>Time</label><input type="time" id="incident-time" value="' + timeVal + '" /></div>' +
+      '<div class="field"><label>What happened</label><input type="text" id="incident-desc" value="' + esc(descVal) + '" placeholder="e.g. got into the trash" /></div>' +
+      '<div class="btn-row"><button type="button" class="btn-primary" data-action="' + (editing ? 'save-edit-incident' : 'save-incident') + '">Save</button>' +
+      '<button type="button" class="btn-secondary" data-action="cancel-incident-form">Cancel</button></div></div>';
   }
 
   function mealRowHtml(meal) {
@@ -667,6 +723,14 @@
       '<span style="color:var(--ink-soft);">' + (t.cal ? t.cal.toFixed(2) + ' cal' : '') + '</span>' +
       '<button type="button" class="delete-btn" data-action="edit-meal" data-value="' + meal.id + '">' + ICONS.edit + '</button>' +
       '<button type="button" class="delete-btn" data-action="delete-meal" data-value="' + meal.id + '">' + ICONS.x + '</button></span></li>';
+  }
+
+  function incidentRowHtml(inc) {
+    return '<li><span style="color:var(--amber);display:flex;align-items:center;gap:6px;">' + ICONS.alert +
+      inc.time + ' — ' + esc(inc.description) + '</span>' +
+      '<span style="display:flex;align-items:center;gap:10px;">' +
+      '<button type="button" class="delete-btn" data-action="edit-incident" data-value="' + inc.id + '">' + ICONS.edit + '</button>' +
+      '<button type="button" class="delete-btn" data-action="delete-incident" data-value="' + inc.id + '">' + ICONS.x + '</button></span></li>';
   }
 
   function journalHtml() {
@@ -686,7 +750,16 @@
       : '';
 
     html += '<section class="card"><div class="section-row"><h2>Food</h2><span style="color:var(--ink-soft);font-size:14px;">' + totals.cal.toFixed(2) + ' cal today</span></div>' + nutrientLine;
+
+    if (!state.draftMeal && !state.showIncidentForm) {
+      html += '<button type="button" class="btn-primary" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;" data-action="start-bowl">' +
+        '<img src="icons/bowl-40.png" alt="" style="width:22px;height:22px;" /> Build Bowl</button>' +
+        '<button type="button" class="btn-secondary" style="width:100%;margin-top:8px;display:flex;align-items:center;justify-content:center;gap:8px;" data-action="open-incident-form">' +
+        ICONS.alert + ' Ate something he shouldn\'t</button>';
+    }
+
     html += bowlPanelHtml();
+    html += incidentFormHtml();
 
     var savedMeals = state.entry.meals.filter(function (m) { return m.id !== state.editingMealId; });
     html += '<ul class="log-list">';
@@ -695,12 +768,18 @@
     } else {
       html += savedMeals.map(mealRowHtml).join('');
     }
-    html += '</ul></section>';
+    html += '</ul>';
+
+    var savedIncidents = state.entry.incidents.filter(function (i) { return i.id !== state.editingIncidentId; });
+    if (savedIncidents.length) {
+      html += '<p class="mini-label">Off-plan</p><ul class="log-list">' + savedIncidents.map(incidentRowHtml).join('') + '</ul>';
+    }
+    html += '</section>';
 
     // Poop card
     html += '<section class="card"><div class="section-row"><h2>Bathroom</h2>';
     if (!state.showPoopForm) {
-      html += '<button type="button" class="pill ghost" data-action="open-poop-form">' + ICONS.plus + ' Add</button>';
+      html += '<button type="button" class="pill ghost" data-action="open-poop-form"><img src="icons/poop-40.png" alt="" style="width:16px;height:16px;" /> Add</button>';
     }
     html += '</div>';
 
@@ -733,7 +812,7 @@
             '<button type="button" class="btn-secondary" data-action="cancel-edit-poop-log">Cancel</button></div></div></li>';
         }
         var badge = p.colorAbnormal ? '<span class="badge-abnormal">' + ICONS.alert + 'Abnormal color' + (p.colorNote ? ': ' + esc(p.colorNote) : '') + '</span>' : '';
-        return '<li><span>' + p.time + ' — ' + p.size + ', ' + p.texture + badge + '</span>' +
+        return '<li><span style="display:flex;align-items:center;gap:6px;"><img src="icons/poop-40.png" alt="" style="width:16px;height:16px;flex-shrink:0;" />' + p.time + ' — ' + p.size + ', ' + p.texture + badge + '</span>' +
           '<span style="display:flex;align-items:center;gap:10px;">' +
           '<button type="button" class="delete-btn" data-action="edit-poop-log" data-value="' + p.id + '">' + ICONS.edit + '</button>' +
           '<button type="button" class="delete-btn" data-action="delete-poop-log" data-value="' + p.id + '">' + ICONS.x + '</button></span></li>';
@@ -838,6 +917,10 @@
     return html;
   }
 
+  function shortDate(k) {
+    return fromKey(k).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
   function reportsHtml() {
     var anchorInput = state.reportGranularity === 'month'
       ? '<input type="month" id="report-anchor" value="' + state.reportAnchor.slice(0, 7) + '" />'
@@ -849,11 +932,11 @@
       '<button type="button" class="btn-dark" style="margin-top:10px;" data-action="export-excel">' + ICONS.download + ' Export to Excel</button>' +
       '</section>';
 
-    html += '<section class="card"><div class="table-wrap"><table class="report-table"><thead><tr><th>Date</th><th>Cal</th><th>Protein</th><th>Fat</th><th>Fiber</th><th>BMs</th><th>Abnormal</th></tr></thead><tbody>';
+    html += '<section class="card"><h2 style="margin-bottom:10px;">Food &amp; bathroom summary</h2><div class="table-wrap"><table class="report-table"><thead><tr><th>Date</th><th>Cal</th><th>Protein</th><th>Fat</th><th>Fiber</th><th>BMs</th><th>Abnormal</th></tr></thead><tbody>';
     state.reportRows.forEach(function (r) {
       var t = dayTotals(r.meals);
       var abnormal = r.poopLogs.filter(function (p) { return p.colorAbnormal; }).length;
-      html += '<tr><td>' + r.date + '</td><td>' + (t.cal ? t.cal.toFixed(2) : '—') + '</td>' +
+      html += '<tr><td>' + shortDate(r.date) + '</td><td>' + (t.cal ? t.cal.toFixed(2) : '—') + '</td>' +
         '<td>' + (t.protein != null ? round2(t.protein) + 'g' : '—') + '</td>' +
         '<td>' + (t.fat != null ? round2(t.fat) + 'g' : '—') + '</td>' +
         '<td>' + (t.fiber != null ? round2(t.fiber) + 'g' : '—') + '</td>' +
@@ -861,6 +944,26 @@
         '<td class="' + (abnormal > 0 ? 'abnormal' : '') + '">' + (abnormal > 0 ? abnormal : '—') + '</td></tr>';
     });
     html += '</tbody></table></div></section>';
+
+    var poopRows = [];
+    state.reportRows.forEach(function (r) {
+      r.poopLogs.forEach(function (p) {
+        poopRows.push({ date: r.date, time: p.time, size: p.size, texture: p.texture, colorAbnormal: p.colorAbnormal, colorNote: p.colorNote });
+      });
+    });
+    html += '<section class="card"><h2 style="margin-bottom:10px;">Bathroom details</h2>';
+    if (poopRows.length === 0) {
+      html += '<p class="log-empty">No bathroom entries in this range.</p>';
+    } else {
+      html += '<div class="table-wrap"><table class="report-table"><thead><tr><th>Date</th><th>Time</th><th>Size</th><th>Texture</th><th>Color</th></tr></thead><tbody>';
+      poopRows.forEach(function (p) {
+        html += '<tr><td>' + shortDate(p.date) + '</td><td>' + p.time + '</td><td>' + p.size + '</td><td>' + p.texture + '</td>' +
+          '<td class="' + (p.colorAbnormal ? 'abnormal' : '') + '">' + (p.colorAbnormal ? 'Abnormal' + (p.colorNote ? ': ' + esc(p.colorNote) : '') : 'Normal') + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+    html += '</section>';
+
     return html;
   }
 
@@ -880,6 +983,7 @@
           break;
         case 'shift-date': shiftDate(parseInt(value, 10)); break;
 
+        case 'start-bowl': startBowl(); break;
         case 'pick-chip': {
           var parts = value.split(':');
           openChipPicker(parts[0], parts[1]);
@@ -888,12 +992,17 @@
         case 'cancel-pending-item': cancelPendingItem(); break;
         case 'confirm-pending-item': confirmPendingItem(); break;
         case 'remove-draft-item': removeDraftItem(value); break;
-        case 'toggle-other-form': toggleOtherForm(); break;
-        case 'add-other-item': addOtherItem(); break;
         case 'save-meal': saveMeal(); break;
         case 'cancel-meal': cancelMeal(); break;
         case 'edit-meal': startEditMeal(value); break;
         case 'delete-meal': deleteMeal(value); break;
+
+        case 'open-incident-form': openIncidentForm(); break;
+        case 'cancel-incident-form': cancelIncidentForm(); break;
+        case 'save-incident': saveIncident(); break;
+        case 'save-edit-incident': saveEditIncident(); break;
+        case 'edit-incident': startEditIncident(value); break;
+        case 'delete-incident': deleteIncident(value); break;
 
         case 'open-poop-form': openPoopForm(); break;
         case 'cancel-poop': setState({ showPoopForm: false }); break;

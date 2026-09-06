@@ -38,12 +38,28 @@
   }
 
   // Same conversion app.js does on read: an older flat foodLogs array becomes
-  // a meals array (grouped by time). Keeps old remote rows from clobbering
-  // the newer local shape with something the UI can't render.
+  // a meals array (grouped by time), and any type:'other' item embedded in a
+  // meal (from a brief earlier version) is split out into its own incident.
   function toMealsShape(raw) {
-    if (!raw) return { meals: [], poopLogs: [], updatedAt: 0 };
-    if (Array.isArray(raw.meals)) return raw;
-    if (!Array.isArray(raw.foodLogs)) return { meals: [], poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    if (!raw) return { meals: [], incidents: [], poopLogs: [], updatedAt: 0 };
+    if (Array.isArray(raw.meals)) {
+      var incidents = Array.isArray(raw.incidents) ? raw.incidents.slice() : [];
+      var meals = raw.meals.map(function (m) {
+        var keepItems = [];
+        (m.items || []).forEach(function (it) {
+          if (it.type === 'other') {
+            incidents.push({ id: it.id || uid(), time: m.time, description: it.description, updatedAt: m.updatedAt || raw.updatedAt || Date.now() });
+          } else {
+            keepItems.push(it);
+          }
+        });
+        return Object.assign({}, m, { items: keepItems });
+      }).filter(function (m) { return m.items.length > 0; });
+      return { meals: meals, incidents: incidents, poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    }
+    if (!Array.isArray(raw.foodLogs)) {
+      return { meals: [], incidents: raw.incidents || [], poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    }
     var groups = {};
     var order = [];
     raw.foodLogs.forEach(function (f) {
@@ -59,16 +75,30 @@
         fiberG: f.fiberG != null ? f.fiberG : null
       });
     });
-    return { meals: order.map(function (k) { return groups[k]; }), poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
+    return { meals: order.map(function (k) { return groups[k]; }), incidents: [], poopLogs: raw.poopLogs || [], updatedAt: raw.updatedAt || 0 };
   }
 
-  // Converts a raw food_logs array pulled from Supabase into the meals shape.
-  // Handles both current data (already an array of { time, items }) and any
-  // older rows saved back when a "meal" was just one flat food entry.
+  // Converts a raw food_logs array pulled from Supabase into the meals shape,
+  // and splits out any embedded type:'other' items into incidents. Handles
+  // current data (already { time, items }) and older flat-array rows.
   function normalizeRemoteFoodLogs(foodLogsArr, fallbackUpdatedAt) {
     var arr = foodLogsArr || [];
-    if (arr.length === 0) return [];
-    if (arr[0] && Array.isArray(arr[0].items)) return arr;
+    var extraIncidents = [];
+    if (arr.length === 0) return { meals: [], incidents: extraIncidents };
+    if (arr[0] && Array.isArray(arr[0].items)) {
+      var meals = arr.map(function (m) {
+        var keepItems = [];
+        (m.items || []).forEach(function (it) {
+          if (it.type === 'other') {
+            extraIncidents.push({ id: it.id || uid(), time: m.time, description: it.description, updatedAt: m.updatedAt || fallbackUpdatedAt || Date.now() });
+          } else {
+            keepItems.push(it);
+          }
+        });
+        return Object.assign({}, m, { items: keepItems });
+      }).filter(function (m) { return m.items.length > 0; });
+      return { meals: meals, incidents: extraIncidents };
+    }
     var groups = {};
     var order = [];
     arr.forEach(function (f) {
@@ -84,7 +114,7 @@
         fiberG: f.fiberG != null ? f.fiberG : null
       });
     });
-    return order.map(function (k) { return groups[k]; });
+    return { meals: order.map(function (k) { return groups[k]; }), incidents: extraIncidents };
   }
 
   function refreshApp() {
@@ -144,6 +174,7 @@
     return sb.from('entries').upsert({
       date: dateKey,
       food_logs: entry.meals,
+      incidents: entry.incidents,
       poop_logs: entry.poopLogs,
       updated_at: new Date(entry.updatedAt || Date.now()).toISOString()
     }, { onConflict: 'date,user_id' }).then(function (res) { return !res.error; }).catch(function () { return false; });
@@ -244,8 +275,11 @@
       var remoteEntries = {};
       (entriesRes.data || []).forEach(function (r) {
         var updatedAtMs = new Date(r.updated_at).getTime();
+        var normalized = normalizeRemoteFoodLogs(r.food_logs, updatedAtMs);
+        var incidents = (r.incidents || []).concat(normalized.incidents);
         remoteEntries[r.date] = {
-          meals: normalizeRemoteFoodLogs(r.food_logs, updatedAtMs),
+          meals: normalized.meals,
+          incidents: incidents,
           poopLogs: r.poop_logs || [],
           updatedAt: updatedAtMs
         };

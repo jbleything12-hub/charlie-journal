@@ -395,6 +395,11 @@ main {
 .error-banner svg { width: 18px; height: 18px; flex-shrink: 0; }
 
 /* Report table */
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -4px;
+}
 table.report-table {
   width: 100%;
   border-collapse: collapse;
@@ -406,12 +411,14 @@ table.report-table th {
   font-weight: 700;
   font-size: 12px;
   text-transform: none;
-  padding: 6px 6px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--line);
+  white-space: nowrap;
 }
 table.report-table td {
-  padding: 8px 6px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--sky-50);
+  white-space: nowrap;
 }
 table.report-table td.abnormal { color: var(--amber); font-weight: 700; }
 
