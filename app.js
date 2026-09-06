@@ -95,6 +95,9 @@
   }
 
   function deleteFood(id) {
+    var food = state.foods.find(function (f) { return f.id === id; });
+    var name = food ? food.name : 'this food';
+    if (!window.confirm('Remove ' + name + ' from Charlie\'s foods? Past log entries that used it are kept as-is.')) return;
     var list = state.foods.filter(function (f) { return f.id !== id; });
     setFoods(list);
     setState({ foods: list });
@@ -118,6 +121,7 @@
   }
 
   function deleteFoodLog(id) {
+    if (!window.confirm('Delete this food log entry? This can\'t be undone.')) return;
     var next = Object.assign({}, state.entry, {
       foodLogs: state.entry.foodLogs.filter(function (l) { return l.id !== id; })
     });
@@ -151,6 +155,7 @@
   }
 
   function deletePoopLog(id) {
+    if (!window.confirm('Delete this bathroom entry? This can\'t be undone.')) return;
     var next = Object.assign({}, state.entry, {
       poopLogs: state.entry.poopLogs.filter(function (l) { return l.id !== id; })
     });
@@ -229,6 +234,7 @@
     var cupsEl = document.getElementById('edit-food-log-cups-' + id);
     var cups = parseFloat(cupsEl.value);
     if (isNaN(cups) || cups <= 0) return;
+    if (!window.confirm('Save changes to this food log entry?')) return;
     var food = state.foods.find(function (f) { return f.id === log.foodId; });
     var calories;
     if (food) {
@@ -262,6 +268,7 @@
     setState({ editingPoopLogId: null });
   }
   function saveEditPoopLog(id) {
+    if (!window.confirm('Save changes to this bathroom entry?')) return;
     var timeEl = document.getElementById('edit-poop-time-' + id);
     var noteEl = document.getElementById('edit-poop-note-' + id);
     var next = Object.assign({}, state.entry, {
@@ -293,6 +300,7 @@
     var name = nameEl.value.trim();
     var cals = parseFloat(calsEl.value);
     if (!name || isNaN(cals) || cals <= 0) return;
+    if (!window.confirm('Save changes to this food? This won\'t change calories already logged in the past.')) return;
     var updated = null;
     var list = state.foods.map(function (f) {
       if (f.id !== id) return f;
@@ -304,18 +312,22 @@
     if (updated && window.CharlieSync && window.CharlieSync.pushFood) window.CharlieSync.pushFood(updated);
   }
 
-  // ---- icons (inline SVG, stroke uses currentColor) ----
+  // ---- icons (inline SVG, stroke uses currentColor). Every icon carries an
+  // explicit width/height attribute directly in the markup — not just in
+  // CSS — so it always renders at a sane size even if the stylesheet hasn't
+  // loaded yet or a browser is serving a stale cached copy of it. CSS rules
+  // per-context (e.g. .badge-abnormal svg) can still override this default.
   var ICONS = {
-    journal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13a3 3 0 0 1 3 3v13"/><path d="M4 4v15a2 2 0 0 0 2 2h14"/><path d="M8 9h8M8 13h8"/></svg>',
-    reports: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12.5" y="8" width="3" height="10"/><rect x="18" y="5" width="3" height="13"/></svg>',
-    foods: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11c0-3.87 4-7 9-7s9 3.13 9 7"/><path d="M3 11h18l-1.5 8a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2Z"/></svg>',
-    chevronLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
-    chevronRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>',
-    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
-    x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
-    download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
-    alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 17h.01"/></svg>',
-    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
+    journal: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13a3 3 0 0 1 3 3v13"/><path d="M4 4v15a2 2 0 0 0 2 2h14"/><path d="M8 9h8M8 13h8"/></svg>',
+    reports: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12.5" y="8" width="3" height="10"/><rect x="18" y="5" width="3" height="13"/></svg>',
+    foods: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11c0-3.87 4-7 9-7s9 3.13 9 7"/><path d="M3 11h18l-1.5 8a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2Z"/></svg>',
+    chevronLeft: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+    chevronRight: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>',
+    plus: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
+    x: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+    download: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
+    alert: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 17h.01"/></svg>',
+    edit: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
   };
 
   function segmented(options, value, onclickAttr) {
